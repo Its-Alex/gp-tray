@@ -7,6 +7,10 @@ tray applet with connect/disconnect, multi-portal switching, and desktop alerts.
 
 ![status](https://img.shields.io/badge/platform-linux-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
+<p align="center">
+  <img src="docs/tray-menu.png" alt="gp-tray menu showing the connected portal, a one-click switch to another portal, and disconnect" width="360">
+</p>
+
 ## Features
 
 - **Live status** in the tray — Connected / Connecting / Disconnected, with the
