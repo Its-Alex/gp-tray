@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=GlobalProtect Tray
+Comment=Free status-tray indicator for GlobalProtect (gpclient)
+Exec=gp-tray
+Icon=network-vpn
+Categories=Network;
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5
+Hidden=false

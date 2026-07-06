@@ -1,0 +1,7 @@
+# gp-tray portals — copy this to ~/.config/gp-tray/portals.conf and edit.
+# One portal per line:   Friendly Name = portal.hostname
+# GlobalProtect runs a single tunnel; the tray lets you switch between these
+# one at a time.
+
+Work VPN      = portal.example.com
+Secondary VPN = vpn2.example.com
