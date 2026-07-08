@@ -9,7 +9,7 @@ failure, auth cancel, unexpected drop, and successful connect.
 Portals are read from ~/.config/gp-tray/portals.conf (see portals.conf.example),
 one per line:  Friendly Name = portal.hostname
 """
-import os, subprocess, gi
+import os, subprocess, time, gi
 gi.require_version("Gtk", "3.0"); gi.require_version("GLib", "2.0")
 try:
     gi.require_version("AyatanaAppIndicator3", "0.1")
@@ -25,6 +25,7 @@ LOG_DIR = os.path.expanduser("~/.cache/gp-tray")
 LOG_FILE = os.path.join(LOG_DIR, "connect.log")
 ACTIVE_FILE = os.path.join(LOG_DIR, "active_portal")
 POLL_SECONDS = 3
+CONNECT_TIMEOUT = 120  # seconds; kill a connect that never brings up a tun (stuck SAML auth)
 ICON_CONNECTED = "network-vpn-symbolic"
 ICON_CONNECTING = "network-vpn-acquiring-symbolic"
 ICON_DISCONNECTED = "network-vpn-disconnected-symbolic"
@@ -149,6 +150,7 @@ class GPTray:
         self.active_token = 0
         self.notified_fail = False
         self._switch_attempts = 0
+        self._connect_deadline = 0.0
 
         self.ind = AppIndicator.Indicator.new(
             "gp-tray", ICON_DISCONNECTED,
@@ -243,6 +245,7 @@ class GPTray:
             ["pkexec", "gpclient", "connect", "--browser", "default",
              "--auto-gateway", portal],
             stdout=f, stderr=f, start_new_session=True)
+        self._connect_deadline = time.monotonic() + CONNECT_TIMEOUT
         self.active_token += 1
         token = self.active_token
         GLib.timeout_add(1500, self._watch_connect, proc, token)
@@ -252,6 +255,16 @@ class GPTray:
             return False
         rc = proc.poll()
         if rc is None:
+            if vpn_state() == "connected":
+                return False  # tunnel up; nothing more to watch
+            if time.monotonic() > self._connect_deadline:
+                self._kill_connect()
+                notify("VPN connect timed out",
+                       "Authentication did not complete in time; connection reset.",
+                       critical=True, icon="network-error-symbolic")
+                self.notified_fail = True
+                clear_active()
+                return False
             return True
         if rc != 0 and not self.user_disconnect and not self.notified_fail:
             if rc in (126, 127):
@@ -291,10 +304,26 @@ class GPTray:
             return False
         return True
 
+    def _kill_connect(self):
+        # Force-clear a stuck connect/auth. gpclient runs as root (needs pkexec);
+        # gpauth is the SAML browser helper running as us. `disconnect` handles an
+        # established tunnel; the pkills handle a connect wedged mid-auth (which
+        # `disconnect` alone is a no-op against). Single pkexec = one polkit prompt.
+        subprocess.Popen(
+            ["pkexec", "sh", "-c",
+             "gpclient disconnect 2>/dev/null; pkill -x gpclient; pkill -x gpauth"],
+            start_new_session=True)
+
     def on_disconnect(self, *_):
         self.user_disconnect = True
         self.active_token += 1
-        subprocess.Popen(["pkexec", "gpclient", "disconnect"], start_new_session=True)
+        self._kill_connect()
+        GLib.timeout_add_seconds(4, self._verify_down)
+
+    def _verify_down(self):
+        if vpn_state() != "disconnected":
+            self._kill_connect()  # retry once if the first teardown didn't take
+        return False
 
 
 if __name__ == "__main__":
