@@ -1,7 +1,7 @@
 # gp-tray
 
-A free, lightweight system-tray indicator for **GlobalProtect** on Linux, built
-on the open-source [`gpclient`](https://github.com/yuezk/GlobalProtect-openconnect).
+A free, lightweight system-tray VPN indicator for **GlobalProtect** on Linux,
+built on the open-source [`gpclient`](https://github.com/yuezk/GlobalProtect-openconnect).
 It gives you the one thing the official client doesn't ship on Linux: a proper
 tray applet with connect/disconnect, multi-portal switching, and desktop alerts.
 
@@ -32,9 +32,19 @@ tray applet with connect/disconnect, multi-portal switching, and desktop alerts.
 - [`gpclient`](https://github.com/yuezk/GlobalProtect-openconnect) (`gpclient`, `gpservice`)
 - Python 3 with GTK 3 introspection and an AppIndicator library:
   ```bash
+  # Debian / Ubuntu / Pop!_OS
   sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1 libnotify-bin
+  # Fedora
+  sudo dnf install python3-gobject gtk3 libayatana-appindicator-gtk3 libnotify
+  # Arch
+  sudo pacman -S python-gobject gtk3 libayatana-appindicator libnotify
   ```
 - `pkexec` (polkit) — used to run `gpclient connect/disconnect` with privilege.
+- **GNOME Shell users:** the top-bar tray icon needs the [AppIndicator and
+  KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/)
+  extension — vanilla GNOME Shell (Wayland or X11) hides AppIndicator icons
+  without it. KDE Plasma, XFCE, Cinnamon, MATE, and other tray-capable
+  desktops work out of the box.
 
 ## Install
 
