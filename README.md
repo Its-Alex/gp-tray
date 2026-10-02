@@ -5,6 +5,12 @@ built on the open-source [`gpclient`](https://github.com/yuezk/GlobalProtect-ope
 It gives you the one thing the official client doesn't ship on Linux: a proper
 tray applet with connect/disconnect, multi-portal switching, and desktop alerts.
 
+This is a fork of [DavidVeksler/gp-tray](https://github.com/DavidVeksler/gp-tray)
+that replaces the ad-hoc autostart `.desktop` file with a **systemd user
+service**, follows the **XDG Base Directory** spec, and ships a proper
+`Makefile` for packaging. Packaged for Arch Linux on the
+[AUR](https://aur.archlinux.org/packages/gp-tray).
+
 ![status](https://img.shields.io/badge/platform-linux-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
 <p align="center">
@@ -48,13 +54,33 @@ tray applet with connect/disconnect, multi-portal switching, and desktop alerts.
 
 ## Install
 
+### Arch Linux (AUR)
+
 ```bash
-git clone https://github.com/DavidVeksler/gp-tray.git
-cd gp-tray
-./install.sh
+yay -S gp-tray   # or: paru -S gp-tray
 ```
 
-Then edit your portals:
+### From source
+
+```bash
+git clone https://github.com/Its-Alex/gp-tray.git
+cd gp-tray
+make install-user          # installs to ~/.local, no root needed
+# or, system-wide:
+sudo make install PREFIX=/usr
+```
+
+### Run it
+
+gp-tray runs as a systemd **user** service tied to your graphical session:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now gp-tray.service
+```
+
+On first run it creates `~/.config/gp-tray/portals.conf` — edit it, then
+restart the service:
 
 ```bash
 $EDITOR ~/.config/gp-tray/portals.conf
@@ -66,15 +92,16 @@ Work VPN      = portal.example.com
 Secondary VPN = vpn2.example.com
 ```
 
-Start it (also auto-starts on next login):
-
 ```bash
-gp-tray &
+systemctl --user restart gp-tray.service
 ```
+
+Logs go to the journal: `journalctl --user -u gp-tray.service`.
 
 ## Configuration
 
-Portals live in `~/.config/gp-tray/portals.conf`, one per line as
+Portals live in `$XDG_CONFIG_HOME/gp-tray/portals.conf`
+(`~/.config/gp-tray/portals.conf` by default), one per line as
 `Friendly Name = hostname`. Lines starting with `#` are ignored. You can also
 set the `GP_PORTAL` environment variable to inject an extra portal at runtime.
 
@@ -97,4 +124,6 @@ off a separate `openconnect` process, which `gpclient` 2.x no longer spawns.
 
 ## License
 
-MIT © David Veksler. Not affiliated with Palo Alto Networks or GlobalProtect.
+MIT © David Veksler (original author). Fork maintained by
+[Its-Alex](https://github.com/Its-Alex). Not affiliated with Palo Alto Networks
+or GlobalProtect.
