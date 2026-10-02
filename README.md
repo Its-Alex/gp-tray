@@ -5,11 +5,9 @@ built on the open-source [`gpclient`](https://github.com/yuezk/GlobalProtect-ope
 It gives you the one thing the official client doesn't ship on Linux: a proper
 tray applet with connect/disconnect, multi-portal switching, and desktop alerts.
 
-This is a fork of [DavidVeksler/gp-tray](https://github.com/DavidVeksler/gp-tray)
-that replaces the ad-hoc autostart `.desktop` file with a **systemd user
-service**, follows the **XDG Base Directory** spec, and ships a proper
-`Makefile` for packaging. Packaged for Arch Linux on the
-[AUR](https://aur.archlinux.org/packages/gp-tray).
+This is a fork of [DavidVeksler/gp-tray](https://github.com/DavidVeksler/gp-tray),
+reworked "the Linux way" — see [Changes from upstream](#changes-from-upstream).
+Packaged for Arch Linux on the [AUR](https://aur.archlinux.org/packages/gp-tray).
 
 ![status](https://img.shields.io/badge/platform-linux-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
@@ -37,6 +35,38 @@ service**, follows the **XDG Base Directory** spec, and ships a proper
   browser (`gpauth`); the tunnel runs as a systemd **system** unit
   (`gp-tray-tunnel@<portal>.service`) that a shipped polkit rule lets active
   local users start/stop without authentication.
+
+## Changes from upstream
+
+What this fork changes compared to
+[DavidVeksler/gp-tray](https://github.com/DavidVeksler/gp-tray):
+
+- **No pkexec, no password prompts.** Upstream ran
+  `pkexec gpclient connect/disconnect`, prompting for a password on every
+  action and force-killing processes on disconnect. Here SAML auth runs
+  unprivileged (`gpauth` in your browser) and the tunnel is a systemd
+  **system** unit (`gp-tray-tunnel@<portal>.service`) with a fixed command
+  line, authorized by a shipped polkit rule — see
+  [How privileges work](#how-privileges-work).
+- **systemd user service** (`gp-tray.service`, bound to
+  `graphical-session.target`) instead of an ad-hoc
+  `X-GNOME-Autostart` desktop file.
+- **Supervised tunnel** — the VPN survives tray restarts, logs to the
+  journal, and is torn down cleanly (`SIGINT` = openconnect logout).
+- **Honest state detection** — systemd unit state cross-checked with a live
+  tun device, replacing `pgrep gpclient` heuristics.
+- **XDG Base Directory compliance** — config in
+  `$XDG_CONFIG_HOME/gp-tray/`, logs/state in `$XDG_CACHE_HOME/gp-tray/`,
+  with a commented `portals.conf` template created on first run.
+- **Distinct per-state tray icons** (green / amber / grey shields) shipped
+  and installed into the hicolor theme — upstream relied on theme VPN
+  glyphs that are often missing or indistinguishable.
+- **Proper packaging** — a `Makefile` with `DESTDIR`/`PREFIX`
+  (`install.sh` removed), the canonical
+  [PKGBUILD](packaging/arch/PKGBUILD) in-tree, an
+  [AUR package](https://aur.archlinux.org/packages/gp-tray), and a
+  [release pipeline](RELEASING.md) (`scripts/release.sh` + GitHub Actions)
+  that publishes each tag to the AUR automatically.
 
 ## How privileges work
 
