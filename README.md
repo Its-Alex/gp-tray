@@ -123,6 +123,10 @@ in `gp-tray`, but installing the intermediate is the correct, secure fix.
 **Menu stuck on "Connecting".** Fixed in this project — older approaches keyed
 off a separate `openconnect` process, which `gpclient` 2.x no longer spawns.
 
+## Releasing
+
+See [RELEASING.md](RELEASING.md) for the tag + AUR update process.
+
 ## License
 
 MIT © David Veksler (original author). Fork maintained by
