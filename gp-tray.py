@@ -19,9 +19,11 @@ except (ValueError, ImportError):
     from gi.repository import AppIndicator3 as AppIndicator
 from gi.repository import Gtk, GLib
 
-CONFIG_DIR = os.path.expanduser("~/.config/gp-tray")
+XDG_CONFIG_HOME = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+XDG_CACHE_HOME = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+CONFIG_DIR = os.path.join(XDG_CONFIG_HOME, "gp-tray")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "portals.conf")
-LOG_DIR = os.path.expanduser("~/.cache/gp-tray")
+LOG_DIR = os.path.join(XDG_CACHE_HOME, "gp-tray")
 LOG_FILE = os.path.join(LOG_DIR, "connect.log")
 ACTIVE_FILE = os.path.join(LOG_DIR, "active_portal")
 POLL_SECONDS = 3
