@@ -7,12 +7,14 @@ Wants=network-online.target
 [Service]
 Type=exec
 # The SAML cookie is produced by gpauth in the user's session and handed
-# over through /run/gp-tray/cookie (see tmpfiles.d/gp-tray.conf). pid1
-# reads it at activation; the helper consumes $CREDENTIALS_DIRECTORY/cookie.
+# over through /run/gp-tray/cookie (see tmpfiles.d/gp-tray.conf), alongside
+# the chosen gateway (empty = auto). pid1 reads them at activation; the
+# helper consumes them from $CREDENTIALS_DIRECTORY.
 LoadCredential=cookie:/run/gp-tray/cookie
+LoadCredential=gateway:/run/gp-tray/gateway
 ExecStart=@HELPERDIR@/gp-tray-tunnel %I
-# The cookie is single-use: drop the handoff file as soon as we started.
-ExecStartPost=/usr/bin/rm -f /run/gp-tray/cookie
+# The handoff files are single-use: drop them as soon as we started.
+ExecStartPost=/usr/bin/rm -f /run/gp-tray/cookie /run/gp-tray/gateway
 # openconnect treats SIGINT as "log out and clean up" (routes, resolv.conf).
 KillSignal=SIGINT
 TimeoutStopSec=15

@@ -23,6 +23,20 @@ esac
     exit 1
 }
 
-exec /usr/bin/gpclient connect --cookie-on-stdin --auto-gateway \
-    --interface gp0 -- "$portal" \
+# Gateway chosen in the tray (empty = pick the fastest automatically).
+# Like the portal, it is user-controlled input validated before use;
+# gateway names may contain spaces (e.g. "EU Gateway").
+gateway=$(cat "$CREDENTIALS_DIRECTORY/gateway" 2>/dev/null || true)
+if [ -n "$gateway" ]; then
+    if printf '%s' "$gateway" | LC_ALL=C grep -q '[^A-Za-z0-9 ._:()-]' \
+        || [ "${gateway#-}" != "$gateway" ]; then
+        echo "gp-tray-tunnel: invalid gateway name: $gateway" >&2
+        exit 1
+    fi
+    set -- --gateway "$gateway" -- "$portal"
+else
+    set -- --auto-gateway -- "$portal"
+fi
+
+exec /usr/bin/gpclient connect --cookie-on-stdin --interface gp0 "$@" \
     < "$CREDENTIALS_DIRECTORY/cookie"

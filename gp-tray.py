@@ -31,9 +31,12 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "portals.conf")
 LOG_DIR = os.path.join(XDG_CACHE_HOME, "gp-tray")
 LOG_FILE = os.path.join(LOG_DIR, "connect.log")
 ACTIVE_FILE = os.path.join(LOG_DIR, "active_portal")
+ACTIVE_GW_FILE = os.path.join(LOG_DIR, "active_gateway")
+LAST_GW_FILE = os.path.join(LOG_DIR, "last_gateways")
 POLL_SECONDS = 3
 CONNECT_TIMEOUT = 120  # seconds; abort an auth/connect that never brings up a tun
 COOKIE_FILE = "/run/gp-tray/cookie"  # handoff to gp-tray-tunnel@.service (tmpfiles.d)
+GATEWAY_FILE = "/run/gp-tray/gateway"  # chosen gateway; empty = auto
 TUNNEL_UNIT_GLOB = "gp-tray-tunnel@*.service"
 TUN_IFNAME = "gp0"  # fixed by --interface in the gp-tray-tunnel helper
 ICON_CONNECTED = "gp-tray-connected"
@@ -47,9 +50,12 @@ ICON_FALLBACK_DIR = os.path.join(
 
 CONFIG_TEMPLATE = """\
 # gp-tray portals — one per line:  Friendly Name = portal.hostname
+# Optionally declare gateways after '|' (comma-separated); they appear as a
+# submenu so you can pick one instead of the automatic fastest gateway:
+#   Friendly Name = portal.hostname | Gateway One, Gateway Two
 # Lines starting with '#' are ignored.
 #
-#Work VPN      = portal.example.com
+#Work VPN      = portal.example.com | US-East, EU-Frankfurt
 #Secondary VPN = vpn2.example.com
 """
 
@@ -68,8 +74,9 @@ def ensure_config():
 
 
 def load_portals():
-    """Read (friendly name, host) pairs from the config file. Falls back to
-    example placeholders so first run still shows something to edit."""
+    """Read (friendly name, host, [gateways]) triples from the config file.
+    Falls back to example placeholders so first run still shows something
+    to edit."""
     portals = []
     try:
         with open(CONFIG_FILE) as f:
@@ -77,24 +84,26 @@ def load_portals():
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
-                name, host = line.split("=", 1)
-                name, host = name.strip(), host.strip()
+                name, rest = line.split("=", 1)
+                host_part, _, gw_part = rest.partition("|")
+                name, host = name.strip(), host_part.strip()
+                gateways = [g.strip() for g in gw_part.split(",") if g.strip()]
                 if host:
-                    portals.append((name or host, host))
+                    portals.append((name or host, host, gateways))
     except OSError:
         pass
     if not portals:
-        portals = [("Work VPN", "portal.example.com"),
-                   ("Secondary VPN", "vpn2.example.com")]
+        portals = [("Work VPN", "portal.example.com", []),
+                   ("Secondary VPN", "vpn2.example.com", [])]
     env = os.environ.get("GP_PORTAL")  # optional override
-    if env and env not in {h for _, h in portals}:
-        portals.insert(0, (env, env))
+    if env and env not in {h for _, h, _g in portals}:
+        portals.insert(0, (env, env, []))
     return portals
 
 
 ensure_config()
 PORTALS = load_portals()
-NAME_OF = {host: name for name, host in PORTALS}
+NAME_OF = {host: name for name, host, _ in PORTALS}
 
 
 def friendly(portal):
@@ -206,8 +215,50 @@ def write_active(portal):
 
 
 def clear_active():
+    for p in (ACTIVE_FILE, ACTIVE_GW_FILE):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
+def read_active_gateway():
     try:
-        os.remove(ACTIVE_FILE)
+        with open(ACTIVE_GW_FILE) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def write_active_gateway(gateway):
+    try:
+        with open(ACTIVE_GW_FILE, "w") as f:
+            f.write(gateway or "")
+    except OSError:
+        pass
+
+
+def read_last_gateways():
+    """Per-portal remembered gateway choice ('' = auto)."""
+    last = {}
+    try:
+        with open(LAST_GW_FILE) as f:
+            for line in f:
+                if "=" in line:
+                    host, gw = line.split("=", 1)
+                    last[host.strip()] = gw.strip()
+    except OSError:
+        pass
+    return last
+
+
+def write_last_gateway(portal, gateway):
+    last = read_last_gateways()
+    last[portal] = gateway or ""
+    try:
+        with open(LAST_GW_FILE, "w") as f:
+            for host, gw in last.items():
+                f.write(f"{host} = {gw}\n")
     except OSError:
         pass
 
@@ -239,11 +290,28 @@ class GPTray:
         self.status_item = Gtk.MenuItem(label="Status: …")
         self.status_item.set_sensitive(False)
 
-        self.connect_items = []  # (menu item, portal, friendly name)
-        for name, portal in PORTALS:
+        # (parent item, portal, friendly name, [(sub item, gateway|None)])
+        # gateway None/'' means "Auto (fastest)"; portals without declared
+        # gateways get a plain clickable item, no submenu.
+        self.portal_items = []
+        for name, portal, gateways in PORTALS:
             it = Gtk.MenuItem(label=f"Connect — {name}")
-            it.connect("activate", self.on_connect, portal)
-            self.connect_items.append((it, portal, name))
+            subs = []
+            if gateways:
+                sub = Gtk.Menu()
+                auto_it = Gtk.MenuItem(label="Auto (fastest)")
+                auto_it.connect("activate", self.on_connect, portal, None)
+                sub.append(auto_it)
+                subs.append((auto_it, None))
+                for gw in gateways:
+                    gw_it = Gtk.MenuItem(label=gw)
+                    gw_it.connect("activate", self.on_connect, portal, gw)
+                    sub.append(gw_it)
+                    subs.append((gw_it, gw))
+                it.set_submenu(sub)
+            else:
+                it.connect("activate", self.on_connect, portal, None)
+            self.portal_items.append((it, portal, name, subs))
 
         self.disconnect_item = Gtk.MenuItem(label="Disconnect")
         self.disconnect_item.connect("activate", self.on_disconnect)
@@ -253,7 +321,7 @@ class GPTray:
         quit_item.connect("activate", lambda *_: Gtk.main_quit())
 
         items = [self.status_item, Gtk.SeparatorMenuItem()]
-        items += [it for it, _, _ in self.connect_items]
+        items += [it for it, _, _, _ in self.portal_items]
         items += [self.disconnect_item, Gtk.SeparatorMenuItem(), log_item, quit_item]
         for it in items:
             self.menu.append(it)
@@ -270,31 +338,46 @@ class GPTray:
         s = self._state()
         active = read_active()
         aname = friendly(active) or active
+        active_gw = read_active_gateway()
+        gw_suffix = f" ({active_gw})" if active_gw else ""
 
         if s == "connected":
             self.ind.set_icon_full(ICON_CONNECTED, "Connected")
-            self.ind.set_title(f"GlobalProtect — Connected {aname}".strip())
-            self.status_item.set_label(f"●  Connected:  {aname or 'GlobalProtect'}")
+            self.ind.set_title(f"GlobalProtect — Connected {aname}{gw_suffix}".strip())
+            self.status_item.set_label(
+                f"●  Connected:  {aname or 'GlobalProtect'}{gw_suffix}")
         elif s == "connecting":
             self.ind.set_icon_full(ICON_CONNECTING, "Connecting")
             self.ind.set_title("GlobalProtect — Connecting")
-            self.status_item.set_label(f"…  Connecting:  {aname or '…'}")
+            self.status_item.set_label(f"…  Connecting:  {aname or '…'}{gw_suffix}")
         else:
             self.ind.set_icon_full(ICON_DISCONNECTED, "Disconnected")
             self.ind.set_title("GlobalProtect — Disconnected")
             self.status_item.set_label("○  Disconnected")
 
-        for it, portal, name in self.connect_items:
-            if s != "disconnected" and portal == active:
+        last_gw = read_last_gateways()
+        for it, portal, name, subs in self.portal_items:
+            on_this = s != "disconnected" and portal == active
+            if on_this:
                 verb = "✓ Connected" if s == "connected" else "…  Connecting"
                 it.set_label(f"{verb} — {name}")
-                it.set_sensitive(False)
+                # keep the parent sensitive when it has a submenu, so the
+                # same portal can be reconnected through another gateway
+                it.set_sensitive(bool(subs))
             elif s != "disconnected":
                 it.set_label(f"⇄ Switch to — {name}")
                 it.set_sensitive(True)
             else:
                 it.set_label(f"Connect — {name}")
                 it.set_sensitive(True)
+            # ✓ marks the active gateway while connected to this portal,
+            # otherwise the remembered last choice ('' = auto)
+            mark = active_gw if on_this else last_gw.get(portal, "")
+            for gw_it, gw in subs:
+                base = gw if gw else "Auto (fastest)"
+                current = (gw or "") == mark
+                gw_it.set_label(f"✓ {base}" if current else base)
+                gw_it.set_sensitive(not (on_this and current))
         self.disconnect_item.set_sensitive(s != "disconnected")
 
         if self.prev_state is not None and s != self.prev_state:
@@ -319,10 +402,11 @@ class GPTray:
         self.prev_state = s
         return True
 
-    def _start_connect(self, portal):
+    def _start_connect(self, portal, gateway=None):
         """Phase 1: SAML auth in the user's session (gpauth, no privileges).
         Phase 2 (_watch_auth): hand the cookie to the root tunnel unit."""
         write_active(portal)
+        write_active_gateway(gateway)
         self.user_disconnect = False
         self.notified_fail = False
         f = open(LOG_FILE, "ab")
@@ -332,9 +416,9 @@ class GPTray:
         self._connect_deadline = time.monotonic() + CONNECT_TIMEOUT
         self.active_token += 1
         token = self.active_token
-        GLib.timeout_add(1500, self._watch_auth, self.auth_proc, token, portal)
+        GLib.timeout_add(1500, self._watch_auth, self.auth_proc, token, portal, gateway)
 
-    def _watch_auth(self, proc, token, portal):
+    def _watch_auth(self, proc, token, portal, gateway):
         if token != self.active_token:
             return False
         rc = proc.poll()
@@ -359,7 +443,7 @@ class GPTray:
                 self.notified_fail = True
             clear_active()
             return False
-        ok, err = self._start_tunnel(portal, cookie)
+        ok, err = self._start_tunnel(portal, gateway, cookie)
         if not ok:
             notify("VPN connection failed", err,
                    critical=True, icon="network-error-symbolic")
@@ -369,35 +453,41 @@ class GPTray:
         GLib.timeout_add(1500, self._watch_tunnel, token, portal)
         return False
 
-    def _start_tunnel(self, portal, cookie):
-        """Hand the single-use cookie to systemd and start the tunnel unit.
-        The polkit rule shipped with gp-tray makes this prompt-free; without
-        it, systemctl falls back to a polkit agent prompt."""
+    def _start_tunnel(self, portal, gateway, cookie):
+        """Hand the single-use cookie and the gateway choice to systemd and
+        start the tunnel unit. The polkit rule shipped with gp-tray makes
+        this prompt-free; without it, systemctl falls back to a polkit
+        agent prompt."""
         try:
-            try:
-                os.unlink(COOKIE_FILE)  # stale leftover from an aborted start
-            except FileNotFoundError:
-                pass
-            fd = os.open(COOKIE_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "wb") as f:
-                f.write(cookie)
+            for path in (COOKIE_FILE, GATEWAY_FILE):
+                try:
+                    os.unlink(path)  # stale leftovers from an aborted start
+                except FileNotFoundError:
+                    pass
+            for path, data in ((COOKIE_FILE, cookie),
+                               (GATEWAY_FILE, (gateway or "").encode())):
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
         except FileNotFoundError:
             return False, ("/run/gp-tray missing — system support not installed "
                            "(systemd-tmpfiles --create gp-tray.conf)")
         except (PermissionError, FileExistsError):
-            return False, f"cannot write {COOKIE_FILE} (owned by another user?)"
+            return False, "cannot write /run/gp-tray files (owned by another user?)"
         try:
             r = subprocess.run(["systemctl", "start", unit_for(portal)],
                                capture_output=True, text=True, timeout=30)
         except subprocess.TimeoutExpired:
             return False, "systemctl start timed out"
         finally:
-            try:
-                os.unlink(COOKIE_FILE)  # the unit also removes it (ExecStartPost)
-            except OSError:
-                pass
+            for path in (COOKIE_FILE, GATEWAY_FILE):
+                try:
+                    os.unlink(path)  # the unit also removes them (ExecStartPost)
+                except OSError:
+                    pass
         if r.returncode != 0:
             return False, (r.stderr.strip() or "systemctl start failed")[:300]
+        write_last_gateway(portal, gateway)
         return True, ""
 
     def _watch_tunnel(self, token, portal):
@@ -419,23 +509,27 @@ class GPTray:
             return False
         return True
 
-    def on_connect(self, _item, portal):
-        if self._state() != "disconnected" and read_active() != portal:
-            notify("Switching VPN", f"→ {friendly(portal)}")
+    def on_connect(self, _item, portal, gateway=None):
+        if self._state() != "disconnected" and (
+                read_active() != portal
+                or read_active_gateway() != (gateway or "")):
+            gw_part = f" ({gateway})" if gateway else ""
+            notify("Switching VPN", f"→ {friendly(portal)}{gw_part}")
             self.user_disconnect = True
             self.active_token += 1
             self._teardown()
             write_active(portal)
+            write_active_gateway(gateway)
             self._switch_attempts = 0
-            GLib.timeout_add(1000, self._connect_when_down, portal)
+            GLib.timeout_add(1000, self._connect_when_down, portal, gateway)
             return
-        self._start_connect(portal)
+        self._start_connect(portal, gateway)
 
-    def _connect_when_down(self, portal):
+    def _connect_when_down(self, portal, gateway):
         self._switch_attempts += 1
         if self._state() == "disconnected":
             self.user_disconnect = False
-            self._start_connect(portal)
+            self._start_connect(portal, gateway)
             return False
         if self._switch_attempts > 30:
             notify("VPN switch failed",

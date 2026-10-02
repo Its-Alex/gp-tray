@@ -22,6 +22,9 @@ Packaged for Arch Linux on the [AUR](https://aur.archlinux.org/packages/gp-tray)
   amber / grey) so the tray reads at a glance regardless of icon theme.
 - **Multiple portals**, switched one click at a time (GlobalProtect runs a
   single tunnel). Great when one portal is for databases and another for VMs.
+- **Gateway choice** — declare a portal's gateways in `portals.conf` and pick
+  one from a submenu (or *Auto (fastest)*); the tray remembers your last
+  choice per portal.
 - **One-click switching** — picking another portal auto-disconnects the current
   tunnel, waits for it to drop, then connects the new one.
 - **Desktop notifications** on:
@@ -156,8 +159,18 @@ Logs go to the journal: `journalctl --user -u gp-tray.service`.
 
 Portals live in `$XDG_CONFIG_HOME/gp-tray/portals.conf`
 (`~/.config/gp-tray/portals.conf` by default), one per line as
-`Friendly Name = hostname`. Lines starting with `#` are ignored. You can also
+`Friendly Name = hostname`, with optional gateways after `|`:
+
+```ini
+Work VPN      = portal.example.com | US-East, EU-Frankfurt
+Secondary VPN = vpn2.example.com
+```
+
+Lines starting with `#` are ignored. You can also
 set the `GP_PORTAL` environment variable to inject an extra portal at runtime.
+Gateway names must match what the portal reports (there is no upstream
+command to list them; your VPN admin or the official client's gateway picker
+knows them). Portals without a gateway list connect with `--auto-gateway`.
 
 ## Troubleshooting
 

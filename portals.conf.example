@@ -2,6 +2,10 @@
 # One portal per line:   Friendly Name = portal.hostname
 # GlobalProtect runs a single tunnel; the tray lets you switch between these
 # one at a time.
+#
+# A portal may declare gateways after '|' (comma-separated). They show up as
+# a submenu in the tray — pick one, or "Auto (fastest)" to let the server
+# decide. Gateway names must match what the portal reports (spaces allowed).
 
-Work VPN      = portal.example.com
+Work VPN      = portal.example.com | US-East, EU-Frankfurt
 Secondary VPN = vpn2.example.com
