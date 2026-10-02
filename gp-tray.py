@@ -35,6 +35,7 @@ POLL_SECONDS = 3
 CONNECT_TIMEOUT = 120  # seconds; abort an auth/connect that never brings up a tun
 COOKIE_FILE = "/run/gp-tray/cookie"  # handoff to gp-tray-tunnel@.service (tmpfiles.d)
 TUNNEL_UNIT_GLOB = "gp-tray-tunnel@*.service"
+TUN_IFNAME = "gp0"  # fixed by --interface in the gp-tray-tunnel helper
 ICON_CONNECTED = "gp-tray-connected"
 ICON_CONNECTING = "gp-tray-connecting"
 ICON_DISCONNECTED = "gp-tray-disconnected"
@@ -132,10 +133,13 @@ def log_error_tail():
 
 
 def _tun_up():
+    """True when *our* tunnel interface is up. The interface name is pinned
+    by the tunnel helper (--interface gp0), so other tun devices on the
+    system (tailscale0, virtual machines, …) never count as VPN state."""
     try:
-        out = subprocess.run(["ip", "-br", "link", "show", "type", "tun"],
+        out = subprocess.run(["ip", "-br", "link", "show", "dev", TUN_IFNAME],
                              capture_output=True, text=True).stdout
-        return any(l.split() and "UP" in l for l in out.splitlines())
+        return "UP" in out
     except Exception:
         return False
 
@@ -153,8 +157,9 @@ def unit_for(portal):
 
 
 def unit_state(unit):
-    return subprocess.run(["systemctl", "is-active", unit],
-                          capture_output=True, text=True).stdout.strip()
+    out = subprocess.run(["systemctl", "is-active", unit],
+                         capture_output=True, text=True).stdout
+    return out.split("\n", 1)[0].strip()
 
 
 def tunnel_failure_detail(portal):
@@ -173,16 +178,15 @@ def tunnel_failure_detail(portal):
 
 
 def vpn_state(active_portal):
-    """Tunnel state = our systemd unit's state cross-checked with a live tun
-    device (the unit is 'active' from exec on, before the tunnel is up)."""
-    tun = _tun_up()
-    if active_portal:
-        st = unit_state(unit_for(active_portal))
-        if st in ("active", "activating", "reloading"):
-            return "connected" if tun else "connecting"
-    # No unit of ours running; a live tun still means a tunnel (e.g. started
-    # outside the tray), and showing it beats pretending we're offline.
-    return "connected" if tun else "disconnected"
+    """Tunnel state = our systemd unit's state cross-checked with our tun
+    interface (the unit is 'active' from exec on, before the tunnel is up).
+    Without a recorded portal (e.g. tray restart), fall back to matching any
+    of our tunnel units by glob."""
+    unit = unit_for(active_portal) if active_portal else TUNNEL_UNIT_GLOB
+    if unit_state(unit) in ("active", "activating", "reloading"):
+        return "connected" if _tun_up() else "connecting"
+    # Unit-less but our interface exists: a gp0 tunnel started by hand.
+    return "connected" if _tun_up() else "disconnected"
 
 
 def read_active():

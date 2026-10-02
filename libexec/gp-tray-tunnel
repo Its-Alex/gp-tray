@@ -23,5 +23,6 @@ esac
     exit 1
 }
 
-exec /usr/bin/gpclient connect --cookie-on-stdin --auto-gateway -- "$portal" \
+exec /usr/bin/gpclient connect --cookie-on-stdin --auto-gateway \
+    --interface gp0 -- "$portal" \
     < "$CREDENTIALS_DIRECTORY/cookie"
