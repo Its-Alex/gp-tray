@@ -33,6 +33,28 @@ ICON_CONNECTING = "network-vpn-acquiring-symbolic"
 ICON_DISCONNECTED = "network-vpn-disconnected-symbolic"
 
 
+CONFIG_TEMPLATE = """\
+# gp-tray portals — one per line:  Friendly Name = portal.hostname
+# Lines starting with '#' are ignored.
+#
+#Work VPN      = portal.example.com
+#Secondary VPN = vpn2.example.com
+"""
+
+
+def ensure_config():
+    """Create the config directory and a commented template on first run so
+    users can just edit ~/.config/gp-tray/portals.conf."""
+    if os.path.exists(CONFIG_FILE):
+        return
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CONFIG_FILE, "x") as f:
+            f.write(CONFIG_TEMPLATE)
+    except OSError:
+        pass
+
+
 def load_portals():
     """Read (friendly name, host) pairs from the config file. Falls back to
     example placeholders so first run still shows something to edit."""
@@ -58,6 +80,7 @@ def load_portals():
     return portals
 
 
+ensure_config()
 PORTALS = load_portals()
 NAME_OF = {host: name for name, host in PORTALS}
 
