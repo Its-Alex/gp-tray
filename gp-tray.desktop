@@ -3,5 +3,5 @@ Type=Application
 Name=GlobalProtect Tray
 Comment=Free status-tray indicator for GlobalProtect (gpclient)
 Exec=gp-tray
-Icon=network-vpn
+Icon=gp-tray
 Categories=Network;

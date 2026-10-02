@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- neutral app icon for menus / .desktop entry -->
+  <path d="M8 1 L14 3 V8 C14 11.5 11.5 14 8 15 C4.5 14 2 11.5 2 8 V3 Z" fill="#3584e4"/>
+  <path d="M8 4.5 C6.9 4.5 6 5.4 6 6.5 V7.5 H5.5 V11 H10.5 V7.5 H10 V6.5 C10 5.4 9.1 4.5 8 4.5 Z M8 5.7 C8.45 5.7 8.8 6.05 8.8 6.5 V7.5 H7.2 V6.5 C7.2 6.05 7.55 5.7 8 5.7 Z" fill="#ffffff"/>
+</svg>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- grey shield: VPN disconnected -->
+  <path d="M8 1 L14 3 V8 C14 11.5 11.5 14 8 15 C4.5 14 2 11.5 2 8 V3 Z" fill="#9a9996"/>
+  <path d="M5.5 5.5 L10.5 10.5 M10.5 5.5 L5.5 10.5" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>
+</svg>

@@ -20,7 +20,8 @@ service**, follows the **XDG Base Directory** spec, and ships a proper
 ## Features
 
 - **Live status** in the tray — Connected / Connecting / Disconnected, with the
-  active portal shown by name.
+  active portal shown by name. Each state has its own colored icon (green /
+  amber / grey) so the tray reads at a glance regardless of icon theme.
 - **Multiple portals**, switched one click at a time (GlobalProtect runs a
   single tunnel). Great when one portal is for databases and another for VMs.
 - **One-click switching** — picking another portal auto-disconnects the current

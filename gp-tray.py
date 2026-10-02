@@ -28,9 +28,13 @@ LOG_FILE = os.path.join(LOG_DIR, "connect.log")
 ACTIVE_FILE = os.path.join(LOG_DIR, "active_portal")
 POLL_SECONDS = 3
 CONNECT_TIMEOUT = 120  # seconds; kill a connect that never brings up a tun (stuck SAML auth)
-ICON_CONNECTED = "network-vpn-symbolic"
-ICON_CONNECTING = "network-vpn-acquiring-symbolic"
-ICON_DISCONNECTED = "network-vpn-disconnected-symbolic"
+ICON_CONNECTED = "gp-tray-connected"
+ICON_CONNECTING = "gp-tray-connecting"
+ICON_DISCONNECTED = "gp-tray-disconnected"
+# When running straight from the repo the icons aren't installed in any icon
+# theme, so point the indicator at the icons/ directory next to this script.
+ICON_FALLBACK_DIR = os.path.join(
+    os.path.dirname(os.path.realpath(__file__)), "icons")
 
 
 CONFIG_TEMPLATE = """\
@@ -177,9 +181,15 @@ class GPTray:
         self._switch_attempts = 0
         self._connect_deadline = 0.0
 
-        self.ind = AppIndicator.Indicator.new(
-            "gp-tray", ICON_DISCONNECTED,
-            AppIndicator.IndicatorCategory.SYSTEM_SERVICES)
+        if os.path.isdir(ICON_FALLBACK_DIR):
+            self.ind = AppIndicator.Indicator.new_with_path(
+                "gp-tray", ICON_DISCONNECTED,
+                AppIndicator.IndicatorCategory.SYSTEM_SERVICES,
+                ICON_FALLBACK_DIR)
+        else:
+            self.ind = AppIndicator.Indicator.new(
+                "gp-tray", ICON_DISCONNECTED,
+                AppIndicator.IndicatorCategory.SYSTEM_SERVICES)
         self.ind.set_status(AppIndicator.IndicatorStatus.ACTIVE)
         self.ind.set_title("GlobalProtect")
         self.menu = Gtk.Menu()
