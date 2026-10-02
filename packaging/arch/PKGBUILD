@@ -8,7 +8,7 @@ url="https://github.com/Its-Alex/gp-tray"
 license=('MIT')
 depends=('python' 'python-gobject' 'gtk3' 'libayatana-appindicator' 'libnotify'
          'polkit' 'globalprotect-openconnect' 'hicolor-icon-theme'
-         'iproute2' 'procps-ng' 'xdg-utils')
+         'iproute2' 'systemd' 'xdg-utils')
 optdepends=('gnome-shell-extension-appindicator: tray icon on vanilla GNOME Shell')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('0cd953e55f0566b7f639341f2af32f69e302d2e4a294f08441db10b82cddde22')

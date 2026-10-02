@@ -6,6 +6,11 @@ GlobalProtect VPN via the open-source `gpclient`, switch between multiple
 portals one click at a time, and get desktop notifications on connect
 failure, auth cancel, unexpected drop, and successful connect.
 
+Privilege model (no pkexec): SAML auth runs as the user (gpauth, browser in
+the session); the cookie is handed via /run/gp-tray/cookie to the root
+systemd unit gp-tray-tunnel@<portal>.service, which the user may start/stop
+without a prompt thanks to the shipped polkit rule.
+
 Portals are read from ~/.config/gp-tray/portals.conf (see portals.conf.example),
 one per line:  Friendly Name = portal.hostname
 """
@@ -27,7 +32,9 @@ LOG_DIR = os.path.join(XDG_CACHE_HOME, "gp-tray")
 LOG_FILE = os.path.join(LOG_DIR, "connect.log")
 ACTIVE_FILE = os.path.join(LOG_DIR, "active_portal")
 POLL_SECONDS = 3
-CONNECT_TIMEOUT = 120  # seconds; kill a connect that never brings up a tun (stuck SAML auth)
+CONNECT_TIMEOUT = 120  # seconds; abort an auth/connect that never brings up a tun
+COOKIE_FILE = "/run/gp-tray/cookie"  # handoff to gp-tray-tunnel@.service (tmpfiles.d)
+TUNNEL_UNIT_GLOB = "gp-tray-tunnel@*.service"
 ICON_CONNECTED = "gp-tray-connected"
 ICON_CONNECTING = "gp-tray-connecting"
 ICON_DISCONNECTED = "gp-tray-disconnected"
@@ -93,10 +100,6 @@ def friendly(portal):
     return NAME_OF.get(portal, portal) if portal else ""
 
 
-def _ok(args):
-    return subprocess.run(args, capture_output=True).returncode == 0
-
-
 def notify(title, body="", critical=False, icon="network-vpn-symbolic"):
     try:
         subprocess.Popen([
@@ -137,15 +140,49 @@ def _tun_up():
         return False
 
 
-def vpn_state():
-    """gpclient 2.x embeds openconnect (no separate process), so tie state to
-    the gpclient/gpservice process plus a live tun device."""
-    gp = _ok(["pgrep", "-x", "gpclient"]) or _ok(["pgrep", "-x", "gpservice"])
+_UNIT_CACHE = {}
+
+
+def unit_for(portal):
+    """systemd unit name for a portal's tunnel (instance is systemd-escaped)."""
+    if portal not in _UNIT_CACHE:
+        esc = subprocess.run(["systemd-escape", portal],
+                             capture_output=True, text=True).stdout.strip()
+        _UNIT_CACHE[portal] = f"gp-tray-tunnel@{esc}.service"
+    return _UNIT_CACHE[portal]
+
+
+def unit_state(unit):
+    return subprocess.run(["systemctl", "is-active", unit],
+                          capture_output=True, text=True).stdout.strip()
+
+
+def tunnel_failure_detail(portal):
+    """Best unprivileged hint for why the tunnel unit died (journal access
+    may be restricted, but unit properties are world-readable)."""
+    out = subprocess.run(
+        ["systemctl", "show", unit_for(portal),
+         "-p", "Result", "-p", "ExecMainStatus"],
+        capture_output=True, text=True).stdout
+    props = dict(l.split("=", 1) for l in out.splitlines() if "=" in l)
+    result = props.get("Result", "")
+    if result in ("", "success"):
+        return ""
+    return (f"Tunnel exited ({result}, status {props.get('ExecMainStatus', '?')}). "
+            f"Details: journalctl -u {unit_for(portal)}")
+
+
+def vpn_state(active_portal):
+    """Tunnel state = our systemd unit's state cross-checked with a live tun
+    device (the unit is 'active' from exec on, before the tunnel is up)."""
     tun = _tun_up()
-    if gp and tun:  return "connected"
-    if gp:          return "connecting"
-    if tun:         return "connected"
-    return "disconnected"
+    if active_portal:
+        st = unit_state(unit_for(active_portal))
+        if st in ("active", "activating", "reloading"):
+            return "connected" if tun else "connecting"
+    # No unit of ours running; a live tun still means a tunnel (e.g. started
+    # outside the tray), and showing it beats pretending we're offline.
+    return "connected" if tun else "disconnected"
 
 
 def read_active():
@@ -180,6 +217,7 @@ class GPTray:
         self.notified_fail = False
         self._switch_attempts = 0
         self._connect_deadline = 0.0
+        self.auth_proc = None  # running gpauth (SAML in the user's browser)
 
         if os.path.isdir(ICON_FALLBACK_DIR):
             self.ind = AppIndicator.Indicator.new_with_path(
@@ -219,8 +257,13 @@ class GPTray:
         self.ind.set_menu(self.menu)
         self.refresh(); GLib.timeout_add_seconds(POLL_SECONDS, self.refresh)
 
+    def _state(self):
+        if self.auth_proc is not None and self.auth_proc.poll() is None:
+            return "connecting"  # SAML auth in the browser
+        return vpn_state(read_active())
+
     def refresh(self):
-        s = vpn_state()
+        s = self._state()
         active = read_active()
         aname = friendly(active) or active
 
@@ -261,7 +304,8 @@ class GPTray:
                     notify("VPN disconnected", "The GlobalProtect tunnel dropped.",
                            critical=True, icon="network-error-symbolic")
                 elif not self.notified_fail:
-                    notify("VPN connection failed", log_error_tail(),
+                    notify("VPN connection failed",
+                           tunnel_failure_detail(active) or log_error_tail(),
                            critical=True, icon="network-error-symbolic")
                     self.notified_fail = True
 
@@ -272,54 +316,111 @@ class GPTray:
         return True
 
     def _start_connect(self, portal):
+        """Phase 1: SAML auth in the user's session (gpauth, no privileges).
+        Phase 2 (_watch_auth): hand the cookie to the root tunnel unit."""
         write_active(portal)
         self.user_disconnect = False
         self.notified_fail = False
         f = open(LOG_FILE, "ab")
-        proc = subprocess.Popen(
-            ["pkexec", "gpclient", "connect", "--browser", "default",
-             "--auto-gateway", portal],
-            stdout=f, stderr=f, start_new_session=True)
+        self.auth_proc = subprocess.Popen(
+            ["gpauth", "--browser", "default", portal],
+            stdout=subprocess.PIPE, stderr=f, start_new_session=True)
         self._connect_deadline = time.monotonic() + CONNECT_TIMEOUT
         self.active_token += 1
         token = self.active_token
-        GLib.timeout_add(1500, self._watch_connect, proc, token)
+        GLib.timeout_add(1500, self._watch_auth, self.auth_proc, token, portal)
 
-    def _watch_connect(self, proc, token):
+    def _watch_auth(self, proc, token, portal):
         if token != self.active_token:
             return False
         rc = proc.poll()
         if rc is None:
-            if vpn_state() == "connected":
-                return False  # tunnel up; nothing more to watch
             if time.monotonic() > self._connect_deadline:
-                self._kill_connect()
+                proc.terminate()
+                self.auth_proc = None
                 notify("VPN connect timed out",
-                       "Authentication did not complete in time; connection reset.",
+                       "Authentication did not complete in time.",
                        critical=True, icon="network-error-symbolic")
                 self.notified_fail = True
                 clear_active()
                 return False
             return True
-        if rc != 0 and not self.user_disconnect and not self.notified_fail:
-            if rc in (126, 127):
+        self.auth_proc = None
+        cookie = proc.stdout.read()
+        if rc != 0 or not cookie.strip():
+            if not self.user_disconnect and not self.notified_fail:
                 notify("VPN connect cancelled",
                        "Authentication was dismissed or failed.",
                        critical=True, icon="dialog-password-symbolic")
-            else:
-                notify("VPN connection failed", log_error_tail(),
-                       critical=True, icon="network-error-symbolic")
+                self.notified_fail = True
+            clear_active()
+            return False
+        ok, err = self._start_tunnel(portal, cookie)
+        if not ok:
+            notify("VPN connection failed", err,
+                   critical=True, icon="network-error-symbolic")
             self.notified_fail = True
             clear_active()
+            return False
+        GLib.timeout_add(1500, self._watch_tunnel, token, portal)
         return False
 
+    def _start_tunnel(self, portal, cookie):
+        """Hand the single-use cookie to systemd and start the tunnel unit.
+        The polkit rule shipped with gp-tray makes this prompt-free; without
+        it, systemctl falls back to a polkit agent prompt."""
+        try:
+            try:
+                os.unlink(COOKIE_FILE)  # stale leftover from an aborted start
+            except FileNotFoundError:
+                pass
+            fd = os.open(COOKIE_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(cookie)
+        except FileNotFoundError:
+            return False, ("/run/gp-tray missing — system support not installed "
+                           "(systemd-tmpfiles --create gp-tray.conf)")
+        except (PermissionError, FileExistsError):
+            return False, f"cannot write {COOKIE_FILE} (owned by another user?)"
+        try:
+            r = subprocess.run(["systemctl", "start", unit_for(portal)],
+                               capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            return False, "systemctl start timed out"
+        finally:
+            try:
+                os.unlink(COOKIE_FILE)  # the unit also removes it (ExecStartPost)
+            except OSError:
+                pass
+        if r.returncode != 0:
+            return False, (r.stderr.strip() or "systemctl start failed")[:300]
+        return True, ""
+
+    def _watch_tunnel(self, token, portal):
+        """Wait for the started unit to actually bring the tunnel up."""
+        if token != self.active_token:
+            return False
+        s = vpn_state(portal)
+        if s == "connected":
+            return False  # refresh() notifies the transition
+        if s == "disconnected":
+            return False  # unit died; refresh() reports via tunnel_failure_detail
+        if time.monotonic() > self._connect_deadline:
+            self._teardown()
+            notify("VPN connect timed out",
+                   "The tunnel did not come up in time; connection reset.",
+                   critical=True, icon="network-error-symbolic")
+            self.notified_fail = True
+            clear_active()
+            return False
+        return True
+
     def on_connect(self, _item, portal):
-        if vpn_state() != "disconnected" and read_active() != portal:
+        if self._state() != "disconnected" and read_active() != portal:
             notify("Switching VPN", f"→ {friendly(portal)}")
             self.user_disconnect = True
             self.active_token += 1
-            subprocess.Popen(["pkexec", "gpclient", "disconnect"],
-                             start_new_session=True)
+            self._teardown()
             write_active(portal)
             self._switch_attempts = 0
             GLib.timeout_add(1000, self._connect_when_down, portal)
@@ -328,7 +429,7 @@ class GPTray:
 
     def _connect_when_down(self, portal):
         self._switch_attempts += 1
-        if vpn_state() == "disconnected":
+        if self._state() == "disconnected":
             self.user_disconnect = False
             self._start_connect(portal)
             return False
@@ -339,25 +440,24 @@ class GPTray:
             return False
         return True
 
-    def _kill_connect(self):
-        # Force-clear a stuck connect/auth. gpclient runs as root (needs pkexec);
-        # gpauth is the SAML browser helper running as us. `disconnect` handles an
-        # established tunnel; the pkills handle a connect wedged mid-auth (which
-        # `disconnect` alone is a no-op against). Single pkexec = one polkit prompt.
-        subprocess.Popen(
-            ["pkexec", "sh", "-c",
-             "gpclient disconnect 2>/dev/null; pkill -x gpclient; pkill -x gpauth"],
-            start_new_session=True)
+    def _teardown(self):
+        """Abort an in-flight auth (our own process) and stop any tunnel
+        unit. Both are unprivileged thanks to the polkit rule — no pkexec."""
+        if self.auth_proc is not None and self.auth_proc.poll() is None:
+            self.auth_proc.terminate()
+        self.auth_proc = None
+        subprocess.Popen(["systemctl", "stop", TUNNEL_UNIT_GLOB],
+                         start_new_session=True)
 
     def on_disconnect(self, *_):
         self.user_disconnect = True
         self.active_token += 1
-        self._kill_connect()
+        self._teardown()
         GLib.timeout_add_seconds(4, self._verify_down)
 
     def _verify_down(self):
-        if vpn_state() != "disconnected":
-            self._kill_connect()  # retry once if the first teardown didn't take
+        if self._state() != "disconnected":
+            self._teardown()  # retry once if the first teardown didn't take
         return False
 
 

@@ -1,0 +1,24 @@
+[Unit]
+Description=GlobalProtect tunnel to %I (gp-tray)
+Documentation=https://github.com/Its-Alex/gp-tray
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+# The SAML cookie is produced by gpauth in the user's session and handed
+# over through /run/gp-tray/cookie (see tmpfiles.d/gp-tray.conf). pid1
+# reads it at activation; the helper consumes $CREDENTIALS_DIRECTORY/cookie.
+LoadCredential=cookie:/run/gp-tray/cookie
+ExecStart=@HELPERDIR@/gp-tray-tunnel %I
+# The cookie is single-use: drop the handoff file as soon as we started.
+ExecStartPost=/usr/bin/rm -f /run/gp-tray/cookie
+# openconnect treats SIGINT as "log out and clean up" (routes, resolv.conf).
+KillSignal=SIGINT
+TimeoutStopSec=15
+
+# The tunnel needs root for the tun device, routes and resolv.conf,
+# but nothing from user homes or /tmp.
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes

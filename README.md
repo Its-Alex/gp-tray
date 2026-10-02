@@ -31,8 +31,28 @@ service**, follows the **XDG Base Directory** spec, and ships a proper
   - authentication cancelled/dismissed,
   - unexpected tunnel drop,
   - successful connect.
-- **Accurate state detection** for modern `gpclient` (2.x), which embeds
-  openconnect as a library rather than a separate process.
+- **Accurate state detection** — tunnel state comes from the systemd unit
+  plus a live tun device, not process heuristics.
+- **No pkexec, no password prompts** — SAML auth runs unprivileged in your
+  browser (`gpauth`); the tunnel runs as a systemd **system** unit
+  (`gp-tray-tunnel@<portal>.service`) that a shipped polkit rule lets active
+  local users start/stop without authentication.
+
+## How privileges work
+
+```
+you click Connect
+  └─ gpauth --browser default <portal>        (your user, browser SAML)
+       └─ cookie → /run/gp-tray/cookie        (0600, single-use)
+            └─ systemctl start gp-tray-tunnel@<portal>.service
+                 └─ gpclient connect --cookie-on-stdin   (root, supervised
+                    by systemd, cookie via systemd credentials, then deleted)
+```
+
+Only the tunnel itself runs as root, under a static unit whose command line
+is fixed on disk; the polkit rule authorizes exactly that unit's
+start/stop/restart for active local sessions (the same trust model as
+NetworkManager). Tunnel logs: `journalctl -u 'gp-tray-tunnel@*'`.
 
 ## Requirements
 
@@ -46,7 +66,8 @@ service**, follows the **XDG Base Directory** spec, and ships a proper
   # Arch
   sudo pacman -S python-gobject gtk3 libayatana-appindicator libnotify
   ```
-- `pkexec` (polkit) — used to run `gpclient connect/disconnect` with privilege.
+- polkit — evaluates the shipped rule that authorizes tunnel start/stop
+  (`pkexec` itself is not used).
 - **GNOME Shell users:** the top-bar tray icon needs the [AppIndicator and
   KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/)
   extension — vanilla GNOME Shell (Wayland or X11) hides AppIndicator icons
@@ -66,8 +87,10 @@ yay -S gp-tray   # or: paru -S gp-tray
 ```bash
 git clone https://github.com/Its-Alex/gp-tray.git
 cd gp-tray
-make install-user          # installs to ~/.local, no root needed
-# or, system-wide:
+make install-user               # tray for this user (~/.local)
+sudo make install-privileged    # tunnel unit, root helper, polkit rule, tmpfiles
+sudo systemd-tmpfiles --create gp-tray.conf && sudo systemctl daemon-reload
+# or everything system-wide in one go:
 sudo make install PREFIX=/usr
 ```
 
@@ -118,7 +141,16 @@ sudo update-ca-certificates
 ```
 
 As a last resort you can add `--ignore-tls-errors` to the `gpclient` invocation
-in `gp-tray`, but installing the intermediate is the correct, secure fix.
+in `/usr/lib/gp-tray/gp-tray-tunnel`, but installing the intermediate is the
+correct, secure fix.
+
+**`systemctl start` asks for a password / fails with "Access denied".** The
+polkit rule isn't installed (or polkit wasn't restarted after a manual
+install). Check `/usr/share/polkit-1/rules.d/50-gp-tray.rules` (package) or
+`/etc/polkit-1/rules.d/` (source install).
+
+**Connect fails with `/run/gp-tray missing`.** The tmpfiles entry hasn't been
+applied yet: `sudo systemd-tmpfiles --create gp-tray.conf`.
 
 **Menu stuck on "Connecting".** Fixed in this project — older approaches keyed
 off a separate `openconnect` process, which `gpclient` 2.x no longer spawns.

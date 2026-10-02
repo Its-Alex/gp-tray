@@ -1,0 +1,27 @@
+#!/bin/sh
+# gp-tray-tunnel — privileged ExecStart helper for gp-tray-tunnel@.service.
+#
+# Runs as root with the portal hostname as the unit instance (%I) and the
+# SAML auth cookie provided by systemd as a credential. The portal is the
+# only user-controlled input that reaches this privileged context, so it is
+# validated as a hostname[:port] before being passed — after `--` — to
+# gpclient, which prevents option injection (e.g. a crafted instance name
+# smuggling --script).
+set -eu
+
+portal="${1:?usage: gp-tray-tunnel <portal>}"
+
+case "$portal" in
+    *[!A-Za-z0-9._:-]* | '' | -*)
+        echo "gp-tray-tunnel: invalid portal name: $portal" >&2
+        exit 1
+        ;;
+esac
+
+[ -n "${CREDENTIALS_DIRECTORY:-}" ] || {
+    echo "gp-tray-tunnel: no CREDENTIALS_DIRECTORY; must run via gp-tray-tunnel@.service" >&2
+    exit 1
+}
+
+exec /usr/bin/gpclient connect --cookie-on-stdin --auto-gateway -- "$portal" \
+    < "$CREDENTIALS_DIRECTORY/cookie"

@@ -57,6 +57,10 @@ check_install_layout() {
     local f missing=0
     for f in usr/bin/gp-tray \
              usr/lib/systemd/user/gp-tray.service \
+             usr/lib/systemd/system/gp-tray-tunnel@.service \
+             usr/lib/gp-tray/gp-tray-tunnel \
+             usr/share/polkit-1/rules.d/50-gp-tray.rules \
+             usr/lib/tmpfiles.d/gp-tray.conf \
              usr/share/applications/gp-tray.desktop \
              usr/share/icons/hicolor/scalable/status/gp-tray-connected.svg \
              usr/share/icons/hicolor/scalable/status/gp-tray-connecting.svg \

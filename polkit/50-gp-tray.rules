@@ -1,0 +1,19 @@
+// Allow active local users to control the gp-tray VPN tunnel units
+// without authentication. Only start/stop/restart of the static
+// gp-tray-tunnel@<portal>.service template is covered — its ExecStart is
+// fixed on disk, so this cannot be leveraged to run arbitrary commands.
+// Same trust model as NetworkManager's default network-control policy.
+polkit.addRule(function(action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units" ||
+        !subject.active || !subject.local) {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var unit = action.lookup("unit") || "";
+    var verb = action.lookup("verb") || "";
+    if (unit.indexOf("gp-tray-tunnel@") === 0 &&
+        unit.lastIndexOf(".service") === unit.length - ".service".length &&
+        (verb === "start" || verb === "stop" || verb === "restart")) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});
