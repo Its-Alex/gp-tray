@@ -1,0 +1,14 @@
+[Unit]
+Description=GlobalProtect VPN tray indicator
+Documentation=https://github.com/Its-Alex/gp-tray
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@BINDIR@/gp-tray
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target
