@@ -91,6 +91,8 @@ Full details, diagrams included: [docs/architecture.md](docs/architecture.md).
 
 ## Requirements
 
+Full list with what each tool is used for: [docs/dependencies.md](docs/dependencies.md).
+
 - [`gpclient`](https://github.com/yuezk/GlobalProtect-openconnect) (`gpclient`, `gpservice`)
 - Python 3 with GTK 3 introspection and an AppIndicator library:
   ```bash
