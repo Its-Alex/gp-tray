@@ -110,11 +110,12 @@ cmd_publish() {
     workdir=$(mktemp -d)
     git clone "$AUR_REMOTE" "$workdir/aur"
     cp "$PKGBUILD" "$workdir/aur/PKGBUILD"
+    cp packaging/arch/gp-tray.install "$workdir/aur/gp-tray.install"
     (
         cd "$workdir/aur"
         makepkg --printsrcinfo > .SRCINFO
         makepkg -f          # verify checksum + build before publishing
-        git add PKGBUILD .SRCINFO
+        git add PKGBUILD .SRCINFO gp-tray.install
         git -c user.name="$(git -C "$srcroot" config user.name)" \
             -c user.email="$(git -C "$srcroot" config user.email)" \
             commit -m "$version-$pkgrel: upstream release v$version"

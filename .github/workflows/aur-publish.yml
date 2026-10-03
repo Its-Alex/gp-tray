@@ -37,6 +37,7 @@ jobs:
         with:
           pkgname: gp-tray
           pkgbuild: packaging/arch/PKGBUILD
+          assets: packaging/arch/gp-tray.install
           commit_username: ItsAlex
           commit_email: me@itsalex.fr
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
