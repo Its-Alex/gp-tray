@@ -96,6 +96,14 @@ Switching portal, or switching gateway on the same portal, is a disconnect
 followed by a fresh connect. A new SAML round-trip is unavoidable because
 the cookie is single-use and scoped to one portal.
 
+Suspend is treated as a disconnect too (`Conflicts=sleep.target` +
+`Before=sleep.target` on the tunnel unit): a GlobalProtect session does not
+survive sleep, and leaving the unit running would keep `gp0`, the default
+route and the VPN DNS pointing into a dead tunnel — no internet after
+resume. Stopping before sleep lets `gpclient` restore routing and DNS, so
+the machine wakes up with working networking and the tray simply shows
+Disconnected.
+
 ## How the tray knows the state
 
 The tray polls two facts every 3 seconds and combines them:
