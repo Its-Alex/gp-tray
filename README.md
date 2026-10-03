@@ -87,6 +87,8 @@ is fixed on disk; the polkit rule authorizes exactly that unit's
 start/stop/restart for active local sessions (the same trust model as
 NetworkManager). Tunnel logs: `journalctl -u 'gp-tray-tunnel@*'`.
 
+Full details, diagrams included: [docs/architecture.md](docs/architecture.md).
+
 ## Requirements
 
 - [`gpclient`](https://github.com/yuezk/GlobalProtect-openconnect) (`gpclient`, `gpservice`)
