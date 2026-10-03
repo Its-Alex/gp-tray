@@ -2,6 +2,12 @@
 Type=Application
 Name=GlobalProtect Tray
 Comment=Free status-tray indicator for GlobalProtect (gpclient)
-Exec=gp-tray
+Exec=systemctl --user restart gp-tray.service
 Icon=gp-tray
 Categories=Network;
+Terminal=false
+Actions=Stop;
+
+[Desktop Action Stop]
+Name=Stop GlobalProtect Tray
+Exec=systemctl --user stop gp-tray.service

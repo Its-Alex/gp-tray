@@ -159,6 +159,10 @@ systemctl --user restart gp-tray.service
 
 Logs go to the journal: `journalctl --user -u gp-tray.service`.
 
+The app-menu launcher (`gp-tray.desktop`) restarts the same user service, so
+clicking it relaunches the tray without a terminal; its right-click menu has a
+"Stop GlobalProtect Tray" action.
+
 ## Configuration
 
 Portals live in `$XDG_CONFIG_HOME/gp-tray/portals.conf`
