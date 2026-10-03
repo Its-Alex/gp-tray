@@ -3,6 +3,12 @@ Description=GlobalProtect tunnel to %I (gp-tray)
 Documentation=https://github.com/Its-Alex/gp-tray
 After=network-online.target
 Wants=network-online.target
+# A GlobalProtect session does not survive suspend: after resume the tunnel
+# is dead but gp0, the default route and resolv.conf still point into it,
+# blackholing all traffic. Stop cleanly before sleep so openconnect restores
+# routing/DNS; the tray then shows disconnected and the user reconnects.
+Conflicts=sleep.target
+Before=sleep.target
 
 [Service]
 Type=exec
