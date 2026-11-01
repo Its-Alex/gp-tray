@@ -1,12 +1,16 @@
-use zbus::Connection;
+use std::time::Duration;
+
+use futures_util::StreamExt;
+use zbus::message::Type as MessageType;
 use zbus::zvariant::OwnedObjectPath;
+use zbus::{Connection, MatchRule, MessageStream};
 
 use crate::paths::{TUNNEL_UNIT_PREFIX, TUNNEL_UNIT_SUFFIX};
 
 const SERVICE: &str = "org.freedesktop.systemd1";
 const MANAGER_PATH: &str = "/org/freedesktop/systemd1";
 const MANAGER_INTERFACE: &str = "org.freedesktop.systemd1.Manager";
-const PROPERTIES_INTERFACE: &str = "org.freedesktop.DBus.Properties";
+pub const PROPERTIES_INTERFACE: &str = "org.freedesktop.DBus.Properties";
 
 pub const MANAGER_SIGNAL_INTERFACE: &str = MANAGER_INTERFACE;
 pub const UNIT_INTERFACE: &str = "org.freedesktop.systemd1.Unit";
@@ -90,8 +94,10 @@ pub async fn unit_failure(connection: &Connection, unit_path: &str) -> zbus::Res
     Ok((result, status))
 }
 
-pub async fn start_unit(connection: &Connection, unit: &str) -> zbus::Result<()> {
-    connection
+/// Queues the start job and returns its object path; the caller waits for
+/// `JobRemoved`, which is when the blocking `systemctl start` would return.
+pub async fn start_unit(connection: &Connection, unit: &str) -> zbus::Result<OwnedObjectPath> {
+    let reply = connection
         .call_method(
             Some(SERVICE),
             MANAGER_PATH,
@@ -100,7 +106,58 @@ pub async fn start_unit(connection: &Connection, unit: &str) -> zbus::Result<()>
             &(unit, "replace"),
         )
         .await?;
-    Ok(())
+    reply.body().deserialize()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JobResult {
+    Done,
+    Failed(String),
+    TimedOut,
+}
+
+/// Watches systemd's `JobRemoved` signal for the job `start_unit` returned.
+pub struct JobWatcher {
+    stream: MessageStream,
+}
+
+impl JobWatcher {
+    /// Install the rule before the job starts, or its completion can be missed.
+    pub async fn new(connection: &Connection) -> zbus::Result<Self> {
+        subscribe(connection).await?;
+        let rule = MatchRule::builder()
+            .msg_type(MessageType::Signal)
+            .sender(SERVICE)?
+            .interface(MANAGER_INTERFACE)?
+            .member("JobRemoved")?
+            .build();
+        Ok(Self {
+            stream: MessageStream::for_match_rule(rule, connection, Some(16)).await?,
+        })
+    }
+
+    pub async fn wait(&mut self, job: &str, timeout: Duration) -> zbus::Result<JobResult> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            tokio::select! {
+                message = self.stream.next() => {
+                    let Some(message) = message else {
+                        return Ok(JobResult::TimedOut);
+                    };
+                    let (_, removed, _unit, result): (u32, OwnedObjectPath, String, String) =
+                        message?.body().deserialize()?;
+                    if removed.as_str() == job {
+                        return Ok(if result == "done" {
+                            JobResult::Done
+                        } else {
+                            JobResult::Failed(result)
+                        });
+                    }
+                }
+                () = tokio::time::sleep_until(deadline) => return Ok(JobResult::TimedOut),
+            }
+        }
+    }
 }
 
 pub async fn stop_unit(connection: &Connection, unit: &str) -> zbus::Result<()> {

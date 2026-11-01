@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use notify_rust::{Notification, Urgency};
 use tokio::sync::mpsc::UnboundedSender;
@@ -14,6 +15,8 @@ use crate::paths::{NOTIFICATION_ICON, NOTIFICATION_ICON_AUTH, NOTIFICATION_ICON_
 use crate::state_files;
 use crate::systemd;
 use crate::systemd_escape;
+
+const FAILURE_SETTLE: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Notice {
@@ -203,14 +206,21 @@ pub fn spawn_watcher(
                     let _ = notices.send(Notice::dropped());
                 }
                 Transition::Failed => {
-                    let detail = failure_detail(&state_files::read_active(&paths)).await;
-                    let body = if detail.is_empty() {
-                        log_tail::error_tail(&paths.log_file)
-                    } else {
-                        detail
-                    };
-                    let _ = notices.send(Notice::connect_failed(body));
-                    flags.notified_fail.store(true, Ordering::Relaxed);
+                    // A unit reports `inactive` for a moment while its start
+                    // job is queued; only a settled disconnect is a failure.
+                    tokio::time::sleep(FAILURE_SETTLE).await;
+                    let settled = *states.borrow_and_update();
+                    previous = settled;
+                    if settled != VpnState::Disconnected
+                        || flags.user_disconnect.load(Ordering::Relaxed)
+                    {
+                        continue;
+                    }
+                    if !flags.notified_fail.swap(true, Ordering::Relaxed) {
+                        let body =
+                            failure_body(&state_files::read_active(&paths), &paths.log_file).await;
+                        let _ = notices.send(Notice::connect_failed(body));
+                    }
                 }
                 Transition::None => {}
             }
@@ -223,6 +233,17 @@ pub fn spawn_watcher(
             }
         }
     });
+}
+
+/// What to tell the user about a failed connection: the unit's own exit
+/// reason when systemd has one, else the last error line of the connect log.
+pub async fn failure_body(portal: &str, log_file: &Path) -> String {
+    let detail = failure_detail(portal).await;
+    if detail.is_empty() {
+        log_tail::error_tail(log_file)
+    } else {
+        detail
+    }
 }
 
 /// Best unprivileged hint for why the tunnel unit died, mirroring the Python

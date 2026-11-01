@@ -15,7 +15,7 @@ use tokio::time::Instant;
 
 use crate::config::PortalConfig;
 use crate::engine::{Engine, VpnState};
-use crate::notify::{Flags, Notice};
+use crate::notify::{self, Flags, Notice};
 use crate::paths::{CONNECT_TIMEOUT, COOKIE_FILE, GATEWAY_FILE, Paths, SWITCH_TIMEOUT};
 use crate::state_files;
 use crate::systemd;
@@ -100,6 +100,14 @@ impl Context {
         let _ = self.notices.send(notice);
     }
 
+    /// One failure notification per attempt: the state watcher races this path
+    /// for the same dead unit, so whoever swaps the flag first speaks.
+    fn notify_failure(&self, notice: Notice) {
+        if !self.flags.notified_fail.swap(true, Ordering::Relaxed) {
+            self.notify(notice);
+        }
+    }
+
     fn clear_active(&self) {
         state_files::clear_active(&self.paths);
     }
@@ -163,16 +171,14 @@ async fn authenticate_and_start(context: &Context, portal: String, gateway: Opti
     let (succeeded, cookie) = match outcome {
         AuthOutcome::Finished { succeeded, cookie } => (succeeded, cookie),
         AuthOutcome::TimedOut => {
-            context.notify(Notice::auth_timed_out());
-            context.flags.notified_fail.store(true, Ordering::Relaxed);
+            context.notify_failure(Notice::auth_timed_out());
             context.clear_active();
             return;
         }
         AuthOutcome::SpawnFailed(error) => {
-            context.notify(Notice::connect_failed(truncate(&format!(
+            context.notify_failure(Notice::connect_failed(truncate(&format!(
                 "cannot run gpauth: {error}"
             ))));
-            context.flags.notified_fail.store(true, Ordering::Relaxed);
             context.clear_active();
             return;
         }
@@ -182,16 +188,14 @@ async fn authenticate_and_start(context: &Context, portal: String, gateway: Opti
         let suppressed = context.flags.user_disconnect.load(Ordering::Relaxed)
             || context.flags.notified_fail.load(Ordering::Relaxed);
         if !suppressed {
-            context.notify(Notice::auth_cancelled());
-            context.flags.notified_fail.store(true, Ordering::Relaxed);
+            context.notify_failure(Notice::auth_cancelled());
         }
         context.clear_active();
         return;
     }
 
     if let Err(detail) = start_tunnel(context, &portal, gateway.as_deref(), &cookie).await {
-        context.notify(Notice::connect_failed(detail));
-        context.flags.notified_fail.store(true, Ordering::Relaxed);
+        context.notify_failure(Notice::connect_failed(detail));
         context.clear_active();
         return;
     }
@@ -285,21 +289,45 @@ async fn start_tunnel(
     )?;
 
     let unit = systemd_escape::unit_name(portal);
-    let started = match systemd::connect().await {
-        Ok(connection) => {
-            tokio::time::timeout(START_UNIT_TIMEOUT, systemd::start_unit(&connection, &unit)).await
-        }
+    let connection = match systemd::connect().await {
+        Ok(connection) => connection,
         Err(error) => {
             remove_handoff();
             return Err(truncate(&systemd::describe(&error)));
         }
     };
+    let mut jobs = match systemd::JobWatcher::new(&connection).await {
+        Ok(watcher) => watcher,
+        Err(error) => {
+            remove_handoff();
+            return Err(truncate(&systemd::describe(&error)));
+        }
+    };
+    let job = match systemd::start_unit(&connection, &unit).await {
+        Ok(job) => job,
+        Err(error) => {
+            remove_handoff();
+            return Err(truncate(&systemd::describe(&error)));
+        }
+    };
+
+    // The handoff files must outlive the start job: systemd reads the cookie
+    // when the unit activates, which is after StartUnit itself returns.
+    let outcome = jobs.wait(job.as_str(), START_UNIT_TIMEOUT).await;
     remove_handoff();
 
-    match started {
-        Err(_) => Err("systemctl start timed out".to_owned()),
-        Ok(Err(error)) => Err(truncate(&systemd::describe(&error))),
-        Ok(Ok(())) => {
+    match outcome {
+        Err(error) => Err(truncate(&systemd::describe(&error))),
+        Ok(systemd::JobResult::TimedOut) => Err("systemctl start timed out".to_owned()),
+        Ok(systemd::JobResult::Failed(result)) => {
+            let body = notify::failure_body(portal, &context.paths.log_file).await;
+            Err(if body.is_empty() {
+                format!("systemctl start failed ({result})")
+            } else {
+                body
+            })
+        }
+        Ok(systemd::JobResult::Done) => {
             let _ = state_files::write_last_gateway(&context.paths, portal, gateway);
             Ok(())
         }
@@ -331,8 +359,7 @@ async fn wait_for_tunnel(context: &Context, portal: &str, deadline: Instant) {
             }
             () = tokio::time::sleep(remaining) => {
                 teardown().await;
-                context.notify(Notice::tunnel_timed_out());
-                context.flags.notified_fail.store(true, Ordering::Relaxed);
+                context.notify_failure(Notice::tunnel_timed_out());
                 context.clear_active();
                 return;
             }

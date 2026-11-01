@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Result, bail};
 use futures_util::StreamExt;
+use futures_util::stream::SelectAll;
 use rtnetlink::packet_core::{NetlinkMessage, NetlinkPayload};
 use rtnetlink::packet_route::RouteNetlinkMessage;
 use rtnetlink::packet_route::link::{LinkAttribute, LinkFlags, LinkMessage};
@@ -12,12 +13,13 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use zbus::message::Type as MessageType;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
-use zbus::{Connection, Message, MessageStream};
+use zbus::{Connection, MatchRule, Message, MessageStream};
 
 use crate::paths::TUN_IFNAME;
 use crate::systemd;
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
+const SIGNAL_QUEUE: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VpnState {
@@ -241,7 +243,7 @@ async fn open_session(snapshot: &mut Snapshot) -> Option<Session> {
 
 struct Session {
     connection: Connection,
-    messages: MessageStream,
+    signals: SelectAll<MessageStream>,
     links: LinkMonitor,
     unit_paths: HashMap<String, String>,
 }
@@ -249,9 +251,20 @@ struct Session {
 impl Session {
     async fn connect() -> Result<Self> {
         let connection = systemd::connect().await?;
+        let mut signals = SelectAll::new();
+        for (interface, member) in [
+            (systemd::MANAGER_SIGNAL_INTERFACE, "UnitNew"),
+            (systemd::MANAGER_SIGNAL_INTERFACE, "UnitRemoved"),
+            (systemd::PROPERTIES_INTERFACE, "PropertiesChanged"),
+        ] {
+            signals.push(signal_stream(&connection, interface, member).await?);
+        }
+        // Rules first, then Subscribe: the bus only forwards a broadcast signal
+        // to connections holding a matching rule, and systemd only emits unit
+        // signals to clients that called Subscribe.
         systemd::subscribe(&connection).await?;
         Ok(Self {
-            messages: MessageStream::from(&connection),
+            signals,
             links: LinkMonitor::new()?,
             unit_paths: HashMap::new(),
             connection,
@@ -283,7 +296,7 @@ impl Session {
     async fn next_event(&mut self) -> Result<EngineEvent> {
         loop {
             tokio::select! {
-                message = self.messages.next() => {
+                message = self.signals.next() => {
                     let Some(message) = message else { bail!("D-Bus connection closed") };
                     if let Some(event) = self.translate(message?).await? {
                         return Ok(event);
@@ -344,6 +357,27 @@ enum UnitSignal {
     },
 }
 
+/// The rule that makes the bus forward one of systemd's signals to us. Without
+/// it a connection receives no broadcast signals at all, however many it
+/// subscribes to.
+fn signal_rule(interface: &'static str, member: &'static str) -> zbus::Result<MatchRule<'static>> {
+    Ok(MatchRule::builder()
+        .msg_type(MessageType::Signal)
+        .sender("org.freedesktop.systemd1")?
+        .interface(interface)?
+        .member(member)?
+        .build())
+}
+
+async fn signal_stream(
+    connection: &Connection,
+    interface: &'static str,
+    member: &'static str,
+) -> Result<MessageStream> {
+    let rule = signal_rule(interface, member)?;
+    Ok(MessageStream::for_match_rule(rule, connection, Some(SIGNAL_QUEUE)).await?)
+}
+
 enum ActiveStateProperty {
     Value(String),
     Invalidated,
@@ -373,7 +407,7 @@ fn parse_unit_signal(message: &Message) -> Result<Option<UnitSignal>> {
                 path: path.as_str().to_owned(),
             }))
         }
-        (systemd::UNIT_INTERFACE, "PropertiesChanged") => {
+        (systemd::PROPERTIES_INTERFACE, "PropertiesChanged") => {
             let (changed_interface, changed, invalidated): (
                 String,
                 HashMap<String, OwnedValue>,
@@ -596,10 +630,16 @@ mod tests {
         changed: HashMap<String, OwnedValue>,
         invalidated: Vec<String>,
     ) -> Message {
-        Message::signal(unit_path, systemd::UNIT_INTERFACE, "PropertiesChanged")
-            .unwrap()
-            .build(&(changed_interface, changed, invalidated))
-            .unwrap()
+        // systemd emits PropertiesChanged on org.freedesktop.DBus.Properties,
+        // with the changed interface as the first body argument.
+        Message::signal(
+            unit_path,
+            systemd::PROPERTIES_INTERFACE,
+            "PropertiesChanged",
+        )
+        .unwrap()
+        .build(&(changed_interface, changed, invalidated))
+        .unwrap()
     }
 
     const UNIT_PATH: &str =
@@ -688,11 +728,53 @@ mod tests {
         );
         assert!(parse_unit_signal(&service_properties).unwrap().is_none());
 
+        let unit_interface_header =
+            Message::signal(UNIT_PATH, systemd::UNIT_INTERFACE, "PropertiesChanged")
+                .unwrap()
+                .build(&(
+                    systemd::UNIT_INTERFACE,
+                    HashMap::<String, OwnedValue>::new(),
+                    Vec::<String>::new(),
+                ))
+                .unwrap();
+        assert!(
+            parse_unit_signal(&unit_interface_header).unwrap().is_none(),
+            "PropertiesChanged must be read from org.freedesktop.DBus.Properties"
+        );
+
         let call = Message::method_call("/org/freedesktop/systemd1", "Reload")
             .unwrap()
             .build(&())
             .unwrap();
         assert!(parse_unit_signal(&call).unwrap().is_none());
+    }
+
+    #[test]
+    fn installed_rules_match_the_signals_systemd_sends() {
+        let unit_new = unit_created("gp-tray-tunnel@a.service", UNIT_PATH);
+        let properties = properties_changed(
+            UNIT_PATH,
+            systemd::UNIT_INTERFACE,
+            HashMap::new(),
+            vec!["ActiveState".to_owned()],
+        );
+
+        let unit_new_rule = signal_rule(systemd::MANAGER_SIGNAL_INTERFACE, "UnitNew").unwrap();
+        assert!(unit_new_rule.matches(&unit_new).unwrap());
+        assert!(
+            !unit_new_rule.matches(&properties).unwrap(),
+            "the UnitNew rule must not swallow other signals"
+        );
+
+        let properties_rule =
+            signal_rule(systemd::PROPERTIES_INTERFACE, "PropertiesChanged").unwrap();
+        assert!(properties_rule.matches(&properties).unwrap());
+
+        let wrong_interface = signal_rule(systemd::UNIT_INTERFACE, "PropertiesChanged").unwrap();
+        assert!(
+            !wrong_interface.matches(&properties).unwrap(),
+            "a rule on the changed interface never matches the signal"
+        );
     }
 
     #[test]
