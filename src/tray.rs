@@ -33,16 +33,16 @@ enum Phase {
 
 /// The three looks the tray has, derived from the four engine states.
 #[derive(Debug, Clone)]
-pub struct View {
-    pub state: VpnState,
-    pub active_portal: String,
-    pub active_gateway: String,
-    pub remembered_gateways: LastGateways,
-    pub config: PortalConfig,
+struct View {
+    state: VpnState,
+    active_portal: String,
+    active_gateway: String,
+    remembered_gateways: LastGateways,
+    config: PortalConfig,
 }
 
 impl View {
-    pub fn read(state: VpnState, config: PortalConfig, paths: &Paths) -> Self {
+    fn read(state: VpnState, config: PortalConfig, paths: &Paths) -> Self {
         Self {
             state,
             active_portal: state_files::read_active(paths),
@@ -60,7 +60,7 @@ impl View {
         }
     }
 
-    pub fn icon_name(&self) -> &'static str {
+    fn icon_name(&self) -> &'static str {
         match self.phase() {
             Phase::Connected => ICON_CONNECTED,
             Phase::Connecting => ICON_CONNECTING,
@@ -80,7 +80,7 @@ impl View {
         }
     }
 
-    pub fn title(&self) -> String {
+    fn title(&self) -> String {
         match self.phase() {
             Phase::Connected => format!(
                 "GlobalProtect — Connected {}{}",
@@ -94,7 +94,7 @@ impl View {
         }
     }
 
-    pub fn status_label(&self) -> String {
+    fn status_label(&self) -> String {
         let name = self.active_name();
         let fallback = |default: &str| {
             if name.is_empty() {
@@ -120,7 +120,7 @@ impl View {
         self.phase() != Phase::Disconnected && host == self.active_portal
     }
 
-    pub fn portal_label(&self, host: &str, name: &str) -> String {
+    fn portal_label(&self, host: &str, name: &str) -> String {
         if self.on_this_portal(host) {
             let verb = match self.phase() {
                 Phase::Connected => "✓ Connected",
@@ -134,7 +134,7 @@ impl View {
         }
     }
 
-    pub fn portal_enabled(&self, host: &str, has_gateways: bool) -> bool {
+    fn portal_enabled(&self, host: &str, has_gateways: bool) -> bool {
         !self.on_this_portal(host) || has_gateways
     }
 
@@ -146,7 +146,7 @@ impl View {
         }
     }
 
-    pub fn gateway_label(&self, host: &str, gateway: Option<&str>) -> String {
+    fn gateway_label(&self, host: &str, gateway: Option<&str>) -> String {
         let base = gateway.unwrap_or("Auto (fastest)");
         if gateway.unwrap_or("") == self.gateway_mark(host) {
             format!("✓ {base}")
@@ -155,11 +155,11 @@ impl View {
         }
     }
 
-    pub fn gateway_enabled(&self, host: &str, gateway: Option<&str>) -> bool {
+    fn gateway_enabled(&self, host: &str, gateway: Option<&str>) -> bool {
         !(self.on_this_portal(host) && gateway.unwrap_or("") == self.gateway_mark(host))
     }
 
-    pub fn disconnect_enabled(&self) -> bool {
+    fn disconnect_enabled(&self) -> bool {
         self.phase() != Phase::Disconnected
     }
 }

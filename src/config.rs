@@ -3,7 +3,7 @@ use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::Path;
 
-pub const CONFIG_TEMPLATE: &str = "\
+const CONFIG_TEMPLATE: &str = "\
 # gp-tray portals — one per line:  Friendly Name = portal.hostname
 # Optionally declare gateways after '|' (comma-separated); they appear as a
 # submenu so you can pick one instead of the automatic fastest gateway:
@@ -82,7 +82,7 @@ pub fn ensure_config(config_dir: &Path, config_file: &Path) -> io::Result<()> {
     file.write_all(CONFIG_TEMPLATE.as_bytes())
 }
 
-pub fn parse(text: &str) -> Vec<Portal> {
+fn parse(text: &str) -> Vec<Portal> {
     let mut portals = Vec::new();
     for line in text.lines() {
         let line = line.trim();

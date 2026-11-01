@@ -18,7 +18,7 @@ impl Paths {
         })
     }
 
-    pub fn resolve(home: Option<PathBuf>, var: impl Fn(&str) -> Option<PathBuf>) -> Self {
+    pub(crate) fn resolve(home: Option<PathBuf>, var: impl Fn(&str) -> Option<PathBuf>) -> Self {
         let home = home.unwrap_or_else(|| PathBuf::from("."));
         let base = |key: &str, fallback: &str| {
             var(key)

@@ -31,7 +31,7 @@ const MAX_MESSAGE_LENGTH: usize = 300;
 /// What the tray asked for, kept separate from the implementation so the
 /// menu can stay synchronous.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Request {
+enum Request {
     Connect {
         portal: String,
         gateway: Option<String>,

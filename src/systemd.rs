@@ -197,7 +197,7 @@ pub fn describe(error: &zbus::Error) -> String {
 
 /// Mirrors `systemd-escape` for a single name: `/` becomes `-`, a leading `.`
 /// and every byte outside `[A-Za-z0-9_.:-]` becomes a lowercase `\xNN` escape.
-pub fn escape(name: &str) -> String {
+fn escape(name: &str) -> String {
     let mut escaped = String::with_capacity(name.len());
     for (index, byte) in name.bytes().enumerate() {
         let keep = byte.is_ascii_alphanumeric()

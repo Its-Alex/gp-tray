@@ -275,14 +275,14 @@ const MAX_LENGTH: usize = 300;
 
 /// Best guess at the reason a connection failed: the last error-looking line
 /// of the connect log, else the last non-empty line.
-pub fn error_tail(log_file: &Path) -> String {
+fn error_tail(log_file: &Path) -> String {
     let Ok(bytes) = std::fs::read(log_file) else {
         return String::new();
     };
     error_tail_of(&String::from_utf8_lossy(&bytes))
 }
 
-pub fn error_tail_of(text: &str) -> String {
+fn error_tail_of(text: &str) -> String {
     let tail: Vec<&str> = text.lines().rev().take(TAIL_LINES).collect();
 
     for line in &tail {
