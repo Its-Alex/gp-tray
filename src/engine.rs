@@ -81,12 +81,7 @@ impl Snapshot {
 #[derive(Clone)]
 pub struct Engine {
     state: watch::Receiver<VpnState>,
-    commands: mpsc::UnboundedSender<Command>,
-}
-
-enum Command {
-    Authenticating(bool),
-    Resync,
+    authenticating: mpsc::UnboundedSender<bool>,
 }
 
 impl Engine {
@@ -94,14 +89,14 @@ impl Engine {
     /// run, so `state()` is accurate from the first call.
     pub async fn spawn() -> Self {
         let (state_tx, state_rx) = watch::channel(VpnState::Disconnected);
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (authenticating_tx, authenticating_rx) = mpsc::unbounded_channel();
         let mut snapshot = Snapshot::default();
         let session = open_session(&mut snapshot).await;
         state_tx.send_replace(snapshot.state());
-        tokio::spawn(run(state_tx, command_rx, snapshot, session));
+        tokio::spawn(run(state_tx, authenticating_rx, snapshot, session));
         Self {
             state: state_rx,
-            commands: command_tx,
+            authenticating: authenticating_tx,
         }
     }
 
@@ -115,11 +110,7 @@ impl Engine {
 
     /// SAML runs in the browser: the tray owns that phase, not systemd.
     pub fn set_authenticating(&self, authenticating: bool) {
-        let _ = self.commands.send(Command::Authenticating(authenticating));
-    }
-
-    pub fn resync(&self) {
-        let _ = self.commands.send(Command::Resync);
+        let _ = self.authenticating.send(authenticating);
     }
 }
 
@@ -132,14 +123,14 @@ enum EngineEvent {
 }
 
 enum Wake {
-    Command(Option<Command>),
+    Authenticating(Option<bool>),
     Event(Result<EngineEvent>),
     Retry,
 }
 
 async fn run(
     state_tx: watch::Sender<VpnState>,
-    mut commands: mpsc::UnboundedReceiver<Command>,
+    mut authenticating: mpsc::UnboundedReceiver<bool>,
     mut snapshot: Snapshot,
     mut session: Option<Session>,
 ) {
@@ -148,22 +139,23 @@ async fn run(
         let wake = match session.as_mut() {
             Some(open) => {
                 tokio::select! {
-                    command = commands.recv() => Wake::Command(command),
+                    flag = authenticating.recv() => Wake::Authenticating(flag),
                     event = open.next_event() => Wake::Event(event),
                 }
             }
             None => {
                 tokio::select! {
-                    command = commands.recv() => Wake::Command(command),
+                    flag = authenticating.recv() => Wake::Authenticating(flag),
                     () = tokio::time::sleep(RECONNECT_DELAY) => Wake::Retry,
                 }
             }
         };
 
         let healthy = match wake {
-            Wake::Command(None) => break,
-            Wake::Command(Some(command)) => {
-                apply_command(command, &mut snapshot, session.as_mut()).await
+            Wake::Authenticating(None) => break,
+            Wake::Authenticating(Some(flag)) => {
+                snapshot.authenticating = flag;
+                true
             }
             Wake::Event(Ok(event)) => apply_event(event, &mut snapshot, session.as_mut()).await,
             Wake::Event(Err(_)) => false,
@@ -180,23 +172,6 @@ async fn run(
             published = state;
             state_tx.send_replace(state);
         }
-    }
-}
-
-async fn apply_command(
-    command: Command,
-    snapshot: &mut Snapshot,
-    session: Option<&mut Session>,
-) -> bool {
-    match command {
-        Command::Authenticating(authenticating) => {
-            snapshot.authenticating = authenticating;
-            true
-        }
-        Command::Resync => match session {
-            Some(session) => session.resync(snapshot).await.is_ok(),
-            None => true,
-        },
     }
 }
 

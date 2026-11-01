@@ -6,7 +6,6 @@ pub const COOKIE_FILE: &str = "/run/gp-tray/cookie";
 pub const GATEWAY_FILE: &str = "/run/gp-tray/gateway";
 pub const TUNNEL_UNIT_PREFIX: &str = "gp-tray-tunnel@";
 pub const TUNNEL_UNIT_SUFFIX: &str = ".service";
-pub const TUNNEL_UNIT_GLOB: &str = "gp-tray-tunnel@*.service";
 
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
 pub const SWITCH_TIMEOUT: Duration = Duration::from_secs(30);
