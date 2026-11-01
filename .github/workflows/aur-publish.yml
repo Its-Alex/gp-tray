@@ -22,6 +22,17 @@ jobs:
       - name: Pin pkgver and tarball sha256 in PKGBUILD
         run: scripts/release.sh prepare "$VERSION"
 
+      - name: Verify the package builds
+        # The AUR action builds with makepkg --nodeps in an image without rust,
+        # so build the pinned PKGBUILD here, as an unprivileged user, first.
+        run: |
+          docker run --rm -v "$PWD/packaging/arch:/build:ro" archlinux:base bash -euo pipefail -c '
+            pacman -Sy --noconfirm --needed base-devel rust cargo >/dev/null
+            useradd -m builder
+            cp -r /build /tmp/pkg && chown -R builder /tmp/pkg
+            runuser -u builder -- bash -c "cd /tmp/pkg && makepkg --noconfirm --nodeps"
+          '
+
       - name: Commit pinned PKGBUILD back to main
         run: |
           git config user.name "github-actions[bot]"
@@ -42,4 +53,4 @@ jobs:
           commit_email: me@itsalex.fr
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_message: "${{ env.VERSION }}-1: upstream release v${{ env.VERSION }}"
-          test: true # build the package in an Arch container before pushing
+          test: false # built by the step above; this image has no rust toolchain
