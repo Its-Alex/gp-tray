@@ -7,3 +7,6 @@ __pycache__/
 gp-tray.service
 gp-tray.service.user
 gp-tray-tunnel@.service
+
+# Rust build output
+/target
