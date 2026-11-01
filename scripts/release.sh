@@ -79,6 +79,9 @@ cmd_tag() {
     git fetch origin main
     [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || die "main not in sync with origin"
     git rev-parse -q --verify "refs/tags/v$version" >/dev/null && die "tag v$version already exists"
+    local crate_version
+    crate_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
+    [ "$crate_version" = "$version" ] || die "Cargo.toml version is '$crate_version', the tag says $version"
     cargo build --release --locked
     check_install_layout
     git tag -a "v$version" -m "gp-tray $version"

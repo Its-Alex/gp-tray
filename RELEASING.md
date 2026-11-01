@@ -1,7 +1,9 @@
 # Releasing gp-tray
 
-Versions are git tags (`vX.Y.Z`) — there is no version string in the code.
-Each release is a tag on `main` plus an update of the AUR package that
+Versions are git tags (`vX.Y.Z`). The version also lives in `Cargo.toml`
+(the binary prints it with `gp-tray --version`), and the two must agree:
+`scripts/release.sh tag` refuses to tag when `Cargo.toml` says something
+else. Each release is a tag on `main` plus an update of the AUR package that
 points at its GitHub tarball. No GitHub release is created; the tag alone
 is what the AUR `source=` URL needs.
 
@@ -17,10 +19,11 @@ The canonical `PKGBUILD` lives in this repo at
 scripts/release.sh tag X.Y.Z
 ```
 
-This checks the tree is clean and in sync, byte-compiles the script,
-verifies the `make install` layout, then creates and pushes the annotated
-tag. The [`Publish to AUR` workflow](.github/workflows/aur-publish.yml)
-does the rest on the tag push:
+This checks the tree is clean and in sync, that the `Cargo.toml` version
+equals the tag, builds the release binary, verifies the `make install`
+layout, then creates and pushes the annotated tag. The
+[`Publish to AUR` workflow](.github/workflows/aur-publish.yml) does the rest
+on the tag push:
 
 1. pins `pkgver`, `pkgrel=1` and the tag tarball's sha256 into
    `packaging/arch/PKGBUILD` (`scripts/release.sh prepare`),
@@ -61,6 +64,7 @@ number instead of the version: `scripts/release.sh publish X.Y.Z 2`.
 
 ## Checklist (what the tooling verifies)
 
+- [ ] `Cargo.toml` version equals the tag (`release.sh tag`)
 - [ ] `make install DESTDIR=… PREFIX=/usr` lays out binary, unit,
       `.desktop`, and all four icons (`release.sh tag`)
 - [ ] tarball sha256 pinned from the actual tag archive (`release.sh prepare`)
