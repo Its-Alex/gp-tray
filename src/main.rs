@@ -2,7 +2,11 @@ use std::io::Write;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use gp_tray::config;
 use gp_tray::engine::Engine;
+use gp_tray::paths::Paths;
+use gp_tray::tray::{TrayApp, TrayCommand, icon_theme_path};
+use ksni::TrayMethods;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -23,15 +27,54 @@ async fn main() -> ExitCode {
             print_usage();
             ExitCode::SUCCESS
         }
-        [] => {
-            eprintln!("gp-tray: the tray UI is not wired up yet");
-            ExitCode::FAILURE
-        }
+        [] => run_tray().await,
         _ => {
             print_usage();
             ExitCode::from(2)
         }
     }
+}
+
+async fn run_tray() -> ExitCode {
+    let paths = Paths::from_env();
+    let _ = config::ensure_config(&paths.config_dir, &paths.config_file);
+    let _ = std::fs::create_dir_all(&paths.cache_dir);
+
+    let gp_portal = std::env::var("GP_PORTAL").ok();
+    let config = config::load(&paths.config_file).with_env_override(gp_portal.as_deref());
+    let engine = Engine::spawn().await;
+    let icon_theme_path = std::env::current_exe()
+        .map(|exe| icon_theme_path(&exe))
+        .unwrap_or_default();
+    let (app, mut commands) = TrayApp::new(engine.state(), config, paths, icon_theme_path);
+    let handle = match app.spawn().await {
+        Ok(handle) => handle,
+        Err(error) => {
+            eprintln!("gp-tray: cannot start the tray: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut states = engine.state_stream();
+    loop {
+        tokio::select! {
+            changed = states.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                let state = *states.borrow_and_update();
+                handle.update(|app| app.set_state(state)).await;
+            }
+            command = commands.recv() => match command {
+                None => break,
+                Some(TrayCommand::Quit) => break,
+                Some(command) => eprintln!("gp-tray: action not wired up yet: {command:?}"),
+            },
+            _ = tokio::signal::ctrl_c() => break,
+        }
+    }
+    handle.shutdown().await;
+    ExitCode::SUCCESS
 }
 
 fn print_usage() {

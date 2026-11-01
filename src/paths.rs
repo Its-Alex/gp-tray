@@ -60,11 +60,10 @@ impl Paths {
     }
 
     pub fn icon_fallback_dir(exe: &Path) -> PathBuf {
-        let dir = std::fs::canonicalize(exe)
-            .ok()
-            .and_then(|real| real.parent().map(Path::to_path_buf))
-            .unwrap_or_else(|| PathBuf::from("."));
-        dir.join("icons")
+        let real = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+        real.parent()
+            .map(|parent| parent.join("icons"))
+            .unwrap_or_else(|| PathBuf::from("icons"))
     }
 }
 

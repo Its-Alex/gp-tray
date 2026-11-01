@@ -5,3 +5,4 @@ pub mod paths;
 pub mod state_files;
 pub mod systemd;
 pub mod systemd_escape;
+pub mod tray;
