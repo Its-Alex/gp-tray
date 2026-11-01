@@ -79,7 +79,7 @@ cmd_tag() {
     git fetch origin main
     [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || die "main not in sync with origin"
     git rev-parse -q --verify "refs/tags/v$version" >/dev/null && die "tag v$version already exists"
-    python3 -m py_compile gp-tray.py
+    cargo build --release --locked
     check_install_layout
     git tag -a "v$version" -m "gp-tray $version"
     git push origin main "v$version"

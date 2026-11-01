@@ -20,6 +20,9 @@ Packaged for Arch Linux on the [AUR](https://aur.archlinux.org/packages/gp-tray)
 - **Live status** in the tray — Connected / Connecting / Disconnected, with the
   active portal shown by name. Each state has its own colored icon (green /
   amber / grey) so the tray reads at a glance regardless of icon theme.
+- **Event-driven, no polling** — the tray subscribes to systemd's unit signals
+  and to kernel link events for `gp0`, so the icon changes the moment the
+  tunnel does, and an idle tray wakes up for nothing.
 - **Multiple portals**, switched one click at a time (GlobalProtect runs a
   single tunnel). Great when one portal is for databases and another for VMs.
 - **Gateway choice** — declare a portal's gateways in `portals.conf` and pick
@@ -33,7 +36,8 @@ Packaged for Arch Linux on the [AUR](https://aur.archlinux.org/packages/gp-tray)
   - unexpected tunnel drop,
   - successful connect.
 - **Accurate state detection** — tunnel state comes from the systemd unit
-  plus a live tun device, not process heuristics.
+  signals pushed over D-Bus plus kernel link events for the `gp0` device,
+  not process heuristics.
 - **No pkexec, no password prompts** — SAML auth runs unprivileged in your
   browser (`gpauth`); the tunnel runs as a systemd **system** unit
   (`gp-tray-tunnel@<portal>.service`) that a shipped polkit rule lets active
@@ -44,6 +48,14 @@ Packaged for Arch Linux on the [AUR](https://aur.archlinux.org/packages/gp-tray)
 What this fork changes compared to
 [DavidVeksler/gp-tray](https://github.com/DavidVeksler/gp-tray):
 
+- **Rust instead of Python and GTK.** The tray is one compiled binary
+  (`tokio`, `zbus`, `ksni`, `rtnetlink`), so there is no Python, PyGObject,
+  GTK 3 or AppIndicator runtime to install, and no interpreter start-up on a
+  session login.
+- **Event-driven instead of a 3 second poll.** The tray subscribes to
+  systemd's `PropertiesChanged`/`UnitNew` signals and to `RTNLGRP_LINK`
+  events for `gp0`; the icon follows the tunnel within milliseconds, and a
+  disconnect started outside the tray is reflected immediately too.
 - **No pkexec, no password prompts.** Upstream ran
   `pkexec gpclient connect/disconnect`, prompting for a password on every
   action and force-killing processes on disconnect. Here SAML auth runs
@@ -56,8 +68,8 @@ What this fork changes compared to
   `X-GNOME-Autostart` desktop file.
 - **Supervised tunnel** — the VPN survives tray restarts, logs to the
   journal, and is torn down cleanly (`SIGINT` = openconnect logout).
-- **Honest state detection** — systemd unit state cross-checked with a live
-  tun device, replacing `pgrep gpclient` heuristics.
+- **Honest state detection** — systemd unit state cross-checked with the live
+  `gp0` link, replacing `pgrep gpclient` heuristics and any polling loop.
 - **XDG Base Directory compliance** — config in
   `$XDG_CONFIG_HOME/gp-tray/`, logs/state in `$XDG_CACHE_HOME/gp-tray/`,
   with a commented `portals.conf` template created on first run.
@@ -77,7 +89,7 @@ What this fork changes compared to
 you click Connect
   └─ gpauth --browser default <portal>        (your user, browser SAML)
        └─ cookie → /run/gp-tray/cookie        (0600, single-use)
-            └─ systemctl start gp-tray-tunnel@<portal>.service
+            └─ StartUnit over D-Bus → gp-tray-tunnel@<portal>.service
                  └─ gpclient connect --cookie-on-stdin   (root, supervised
                     by systemd, cookie via systemd credentials, then deleted)
 ```
@@ -93,23 +105,20 @@ Full details, diagrams included: [docs/architecture.md](docs/architecture.md).
 
 Full list with what each tool is used for: [docs/dependencies.md](docs/dependencies.md).
 
-- [`gpclient`](https://github.com/yuezk/GlobalProtect-openconnect) (`gpclient`, `gpservice`)
-- Python 3 with GTK 3 introspection and an AppIndicator library:
-  ```bash
-  # Debian / Ubuntu / Pop!_OS
-  sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1 libnotify-bin
-  # Fedora
-  sudo dnf install python3-gobject gtk3 libayatana-appindicator-gtk3 libnotify
-  # Arch
-  sudo pacman -S python-gobject gtk3 libayatana-appindicator libnotify
-  ```
+- [`gpclient`](https://github.com/yuezk/GlobalProtect-openconnect) (`gpclient`, `gpauth`)
+- A StatusNotifierItem-capable desktop: KDE Plasma, XFCE, Cinnamon, MATE and
+  friends work out of the box; on GNOME Shell see the note below.
 - polkit — evaluates the shipped rule that authorizes tunnel start/stop
   (`pkexec` itself is not used).
+- Nothing else at runtime. The tray is a self-contained binary that speaks
+  D-Bus and netlink directly — no Python, GTK, AppIndicator or libnotify
+  libraries. The released package and `make install` take care of the rest.
+- **Building from source:** Rust 1.85 or newer (edition 2024) with `cargo`.
+  `make install` / `make install-user` run `cargo build --release --locked`.
 - **GNOME Shell users:** the top-bar tray icon needs the [AppIndicator and
   KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/)
-  extension — vanilla GNOME Shell (Wayland or X11) hides AppIndicator icons
-  without it. KDE Plasma, XFCE, Cinnamon, MATE, and other tray-capable
-  desktops work out of the box.
+  extension — vanilla GNOME Shell (Wayland or X11) hides tray icons without
+  it.
 
 ## Install
 
@@ -124,10 +133,11 @@ yay -S gp-tray   # or: paru -S gp-tray
 ```bash
 git clone https://github.com/Its-Alex/gp-tray.git
 cd gp-tray
-make install-user               # tray for this user (~/.local)
+make install-user               # builds the tray (cargo) and installs it to ~/.local
 sudo make install-privileged    # tunnel unit, root helper, polkit rule, tmpfiles
 sudo systemd-tmpfiles --create gp-tray.conf && sudo systemctl daemon-reload
-# or everything system-wide in one go:
+# or everything system-wide in one go (build as yourself first, then install):
+cargo build --release --locked
 sudo make install PREFIX=/usr
 ```
 
@@ -195,16 +205,20 @@ As a last resort you can add `--ignore-tls-errors` to the `gpclient` invocation
 in `/usr/lib/gp-tray/gp-tray-tunnel`, but installing the intermediate is the
 correct, secure fix.
 
-**`systemctl start` asks for a password / fails with "Access denied".** The
-polkit rule isn't installed (or polkit wasn't restarted after a manual
-install). Check `/usr/share/polkit-1/rules.d/50-gp-tray.rules` (package) or
+**A connect fails with a permissions error** (`Access denied`,
+`Interactive authentication required`). The polkit rule isn't installed (or
+polkit wasn't restarted after a manual install). Check
+`/usr/share/polkit-1/rules.d/50-gp-tray.rules` (package) or
 `/etc/polkit-1/rules.d/` (source install).
 
 **Connect fails with `/run/gp-tray missing`.** The tmpfiles entry hasn't been
-applied yet: `sudo systemd-tmpfiles --create gp-tray.conf`.
+applied yet: `sudo systemd-tmpfiles create gp-tray.conf`.
 
-**Menu stuck on "Connecting".** Fixed in this project — older approaches keyed
-off a separate `openconnect` process, which `gpclient` 2.x no longer spawns.
+**The icon stays on "Connecting" while the VPN is up.** That would mean the
+tray is not receiving systemd's unit signals; restart it
+(`systemctl --user restart gp-tray.service`). `gp-tray status --watch` prints
+the transitions the engine sees, which is the quickest way to tell a state
+problem from a UI one.
 
 ## Releasing
 

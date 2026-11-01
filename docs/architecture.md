@@ -76,7 +76,9 @@ Details that matter:
    its owner can read, and it is deleted by the unit the moment the service
    has started. It exists on disk for well under a second in normal
    operation, and `/run` is memory-backed, so it never touches persistent
-   storage.
+   storage. Because the D-Bus start call returns as soon as the job is
+   *queued*, the tray waits for the job to finish before removing its own
+   copy — otherwise the credential could vanish before systemd read it.
 2. The gateway choice travels the same way in a second file. An empty value
    means "let the server pick the fastest gateway".
 3. The service command line is fixed in the installed unit file. The only
@@ -106,23 +108,42 @@ Disconnected.
 
 ## How the tray knows the state
 
-The tray polls two facts every 3 seconds and combines them:
+Three sources push information into one state machine; nothing is polled:
+
+| Source | What it reports | How |
+|---|---|---|
+| systemd | `ActiveState` of every `gp-tray-tunnel@*.service` | `Subscribe()` plus the `UnitNew`, `UnitRemoved` and `PropertiesChanged` signals on `org.freedesktop.systemd1` |
+| the kernel | whether `gp0` exists and is up | netlink link events (`RTNLGRP_LINK`) |
+| `gpauth` | the browser SAML step is in progress | the child process exiting |
+
+Which yields:
 
 | Tunnel unit | `gp0` interface | Shown state |
 |---|---|---|
+| — (SAML running) | any | Connecting |
 | active | up | Connected |
 | active | absent | Connecting |
 | inactive | up | Connected (tunnel started outside the tray) |
 | inactive | absent | Disconnected |
 
-While the browser SAML step is in progress the tray reports Connecting
-regardless, since no unit exists yet. Checking the interface by its fixed
-name is deliberate: matching "any tun device" would misreport other VPNs,
-such as Tailscale, as GlobalProtect state.
+The icon, the title, the menu labels, the menu sensitivity and the
+notifications are all derived from that one state, so they cannot disagree.
 
-Because the tunnel is a systemd service and not a child of the tray, the
-tray can crash or restart without dropping the VPN; on startup it recovers
-the state from the same two facts.
+The two facts that are not pushed — the full unit list and the link list —
+are read once at startup and again only when the D-Bus connection is
+re-established or a signal cannot be attributed: a resync, not a poll. Since
+the tunnel is a systemd service and not a child of the tray, the tray can
+crash or restart without dropping the VPN; on startup the same resync
+recovers the truth.
+
+Checking the interface by its fixed name is deliberate: matching "any tun
+device" would misreport other VPNs, such as Tailscale, as GlobalProtect
+state.
+
+One consequence of listening instead of polling is that systemd's own
+sub-second flapping (a unit reports `inactive` for a moment while its start
+job is queued) is visible. Failures are therefore reported only once the
+disconnect has settled for a second, and only once per attempt.
 
 ## Why not pkexec
 
@@ -151,7 +172,20 @@ Tunnel logs go to the system journal: `journalctl -u 'gp-tray-tunnel@*'`.
 
 ## Where the code lives
 
-- Tray applet: [`gp-tray.py`](../gp-tray.py)
+The tray is a Rust crate; each module owns one concern:
+
+| Module | Responsibility |
+|---|---|
+| [`src/engine.rs`](../src/engine.rs) | Event sources (systemd D-Bus signals, netlink link events, `gpauth` exit) merged into one `VpnState` stream |
+| [`src/tray.rs`](../src/tray.rs) | StatusNotifierItem icon, title and menu, rendered from that state |
+| [`src/actions.rs`](../src/actions.rs) | Connect (SAML, cookie handoff, `StartUnit`), disconnect, switch |
+| [`src/notify.rs`](../src/notify.rs) | Desktop notifications, suppression rules, connect log |
+| [`src/systemd.rs`](../src/systemd.rs) | systemd manager client: units, jobs, failure properties |
+| [`src/config.rs`](../src/config.rs), [`src/state_files.rs`](../src/state_files.rs), [`src/paths.rs`](../src/paths.rs) | `portals.conf`, remembered gateways, XDG locations |
+| [`src/systemd_escape.rs`](../src/systemd_escape.rs), [`src/log_tail.rs`](../src/log_tail.rs) | Unit-name escaping, error-line extraction |
+
+Everything else:
+
 - Tunnel unit template: [`systemd/gp-tray-tunnel@.service.in`](../systemd/gp-tray-tunnel@.service.in)
 - Root-side helper: [`libexec/gp-tray-tunnel`](../libexec/gp-tray-tunnel)
 - polkit rule: [`polkit/50-gp-tray.rules`](../polkit/50-gp-tray.rules)

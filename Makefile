@@ -23,6 +23,10 @@ USER_UNITDIR := $(HOME)/.config/systemd/user
 USER_APPSDIR := $(HOME)/.local/share/applications
 USER_ICONDIR := $(HOME)/.local/share/icons/hicolor/scalable
 
+CARGO   ?= cargo
+BIN     := target/release/gp-tray
+SOURCES := Cargo.toml Cargo.lock $(wildcard src/*.rs)
+
 STATUS_ICONS := icons/gp-tray-connected.svg \
                 icons/gp-tray-connecting.svg \
                 icons/gp-tray-disconnected.svg
@@ -45,8 +49,11 @@ gp-tray.service.user: systemd/gp-tray.service.in
 gp-tray-tunnel@.service: systemd/gp-tray-tunnel@.service.in
 	sed 's|@HELPERDIR@|$(HELPERDIR)|' $< > $@
 
-install: gp-tray.service gp-tray-tunnel@.service
-	install -Dm755 gp-tray.py $(DESTDIR)$(BINDIR)/gp-tray
+$(BIN): $(SOURCES)
+	$(CARGO) build --release --locked
+
+install: gp-tray.service gp-tray-tunnel@.service $(BIN)
+	install -Dm755 $(BIN) $(DESTDIR)$(BINDIR)/gp-tray
 	install -Dm644 gp-tray.service $(DESTDIR)$(UNITDIR)/gp-tray.service
 	install -Dm755 libexec/gp-tray-tunnel $(DESTDIR)$(HELPERDIR)/gp-tray-tunnel
 	install -Dm644 gp-tray-tunnel@.service $(DESTDIR)$(SYSUNITDIR)/gp-tray-tunnel@.service
@@ -88,8 +95,8 @@ uninstall-privileged:
 	      $(DESTDIR)$(POLKITDIR)/50-gp-tray.rules \
 	      $(DESTDIR)$(TMPFILESDIR)/gp-tray.conf
 
-install-user: gp-tray.service.user
-	install -Dm755 gp-tray.py $(USER_BINDIR)/gp-tray
+install-user: gp-tray.service.user $(BIN)
+	install -Dm755 $(BIN) $(USER_BINDIR)/gp-tray
 	install -Dm644 gp-tray.service.user $(USER_UNITDIR)/gp-tray.service
 	install -Dm644 gp-tray.desktop $(USER_APPSDIR)/gp-tray.desktop
 	install -Dm644 -t $(USER_ICONDIR)/status $(STATUS_ICONS)
