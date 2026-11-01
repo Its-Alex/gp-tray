@@ -15,9 +15,9 @@ use zbus::message::Type as MessageType;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::{Connection, MatchRule, Message, MessageStream};
 
-use crate::paths::TUN_IFNAME;
 use crate::systemd;
 
+const TUN_IFNAME: &str = "gp0";
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 const SIGNAL_QUEUE: usize = 64;
 

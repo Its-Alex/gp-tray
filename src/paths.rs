@@ -1,22 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-
-pub const TUN_IFNAME: &str = "gp0";
-pub const COOKIE_FILE: &str = "/run/gp-tray/cookie";
-pub const GATEWAY_FILE: &str = "/run/gp-tray/gateway";
-pub const TUNNEL_UNIT_PREFIX: &str = "gp-tray-tunnel@";
-pub const TUNNEL_UNIT_SUFFIX: &str = ".service";
-
-pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
-pub const SWITCH_TIMEOUT: Duration = Duration::from_secs(30);
-
-pub const ICON_CONNECTED: &str = "gp-tray-connected";
-pub const ICON_CONNECTING: &str = "gp-tray-connecting";
-pub const ICON_DISCONNECTED: &str = "gp-tray-disconnected";
-
-pub const NOTIFICATION_ICON: &str = "network-vpn-symbolic";
-pub const NOTIFICATION_ICON_ERROR: &str = "network-error-symbolic";
-pub const NOTIFICATION_ICON_AUTH: &str = "dialog-password-symbolic";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {

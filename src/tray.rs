@@ -6,8 +6,12 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::config::PortalConfig;
 use crate::engine::VpnState;
-use crate::paths::{ICON_CONNECTED, ICON_CONNECTING, ICON_DISCONNECTED, Paths};
+use crate::paths::Paths;
 use crate::state_files::{self, LastGateways};
+
+const ICON_CONNECTED: &str = "gp-tray-connected";
+const ICON_CONNECTING: &str = "gp-tray-connecting";
+const ICON_DISCONNECTED: &str = "gp-tray-disconnected";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrayCommand {

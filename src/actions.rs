@@ -16,11 +16,14 @@ use tokio::time::Instant;
 use crate::config::PortalConfig;
 use crate::engine::{Engine, VpnState};
 use crate::notify::{self, Flags, Notice};
-use crate::paths::{CONNECT_TIMEOUT, COOKIE_FILE, GATEWAY_FILE, Paths, SWITCH_TIMEOUT};
+use crate::paths::Paths;
 use crate::state_files;
 use crate::systemd;
-use crate::systemd_escape;
 
+const COOKIE_FILE: &str = "/run/gp-tray/cookie";
+const GATEWAY_FILE: &str = "/run/gp-tray/gateway";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
+const SWITCH_TIMEOUT: Duration = Duration::from_secs(30);
 const START_UNIT_TIMEOUT: Duration = Duration::from_secs(30);
 const VERIFY_DOWN_DELAY: Duration = Duration::from_secs(4);
 const MAX_MESSAGE_LENGTH: usize = 300;
@@ -288,7 +291,7 @@ async fn start_tunnel(
         gateway,
     )?;
 
-    let unit = systemd_escape::unit_name(portal);
+    let unit = systemd::unit_name(portal);
     let connection = match systemd::connect().await {
         Ok(connection) => connection,
         Err(error) => {
@@ -335,7 +338,7 @@ async fn start_tunnel(
 }
 
 async fn wait_for_tunnel(context: &Context, portal: &str, deadline: Instant) {
-    let unit = systemd_escape::unit_name(portal);
+    let unit = systemd::unit_name(portal);
     let mut states = context.engine.state_stream();
     let mut connection: Option<zbus::Connection> = None;
 

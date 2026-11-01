@@ -11,10 +11,13 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::config::PortalConfig;
 use crate::engine::{Engine, VpnState};
 use crate::log_tail;
-use crate::paths::{NOTIFICATION_ICON, NOTIFICATION_ICON_AUTH, NOTIFICATION_ICON_ERROR, Paths};
+use crate::paths::Paths;
 use crate::state_files;
 use crate::systemd;
-use crate::systemd_escape;
+
+const NOTIFICATION_ICON: &str = "network-vpn-symbolic";
+const NOTIFICATION_ICON_ERROR: &str = "network-error-symbolic";
+const NOTIFICATION_ICON_AUTH: &str = "dialog-password-symbolic";
 
 const FAILURE_SETTLE: Duration = Duration::from_secs(1);
 
@@ -252,7 +255,7 @@ async fn failure_detail(portal: &str) -> String {
     if portal.is_empty() {
         return String::new();
     }
-    let unit = systemd_escape::unit_name(portal);
+    let unit = systemd::unit_name(portal);
     let Ok(connection) = systemd::connect().await else {
         return String::new();
     };
