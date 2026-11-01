@@ -31,7 +31,7 @@ enum Phase {
     Disconnected,
 }
 
-/// The three looks the Python tray had, derived from the four engine states.
+/// The three looks the tray has, derived from the four engine states.
 #[derive(Debug, Clone)]
 pub struct View {
     pub state: VpnState,

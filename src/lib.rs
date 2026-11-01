@@ -1,7 +1,6 @@
 pub mod actions;
 pub mod config;
 pub mod engine;
-pub mod log_tail;
 pub mod notify;
 pub mod paths;
 pub mod state_files;

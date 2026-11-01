@@ -2,7 +2,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use notify_rust::{Notification, Urgency};
@@ -10,7 +10,6 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::config::PortalConfig;
 use crate::engine::{Engine, VpnState};
-use crate::log_tail;
 use crate::paths::Paths;
 use crate::state_files;
 use crate::systemd;
@@ -112,12 +111,12 @@ impl Notice {
 /// one failure notification per attempt is enough.
 #[derive(Debug, Default)]
 pub struct Flags {
-    pub user_disconnect: std::sync::atomic::AtomicBool,
-    pub notified_fail: std::sync::atomic::AtomicBool,
+    pub user_disconnect: AtomicBool,
+    pub notified_fail: AtomicBool,
 }
 
-/// Desktop notification plus the line the connect log keeps, same wording and
-/// same `[gp-tray] title: body` layout as the Python tray.
+/// Desktop notification plus the line the connect log keeps, in the
+/// `[gp-tray] title: body` layout.
 pub async fn deliver(log_file: &Path, notice: &Notice) {
     let mut notification = Notification::new();
     notification
@@ -243,14 +242,14 @@ pub fn spawn_watcher(
 pub async fn failure_body(portal: &str, log_file: &Path) -> String {
     let detail = failure_detail(portal).await;
     if detail.is_empty() {
-        log_tail::error_tail(log_file)
+        error_tail(log_file)
     } else {
         detail
     }
 }
 
-/// Best unprivileged hint for why the tunnel unit died, mirroring the Python
-/// tray's `systemctl show -p Result -p ExecMainStatus`.
+/// Best unprivileged hint for why the tunnel unit died: the unit's `Result`
+/// and `ExecMainStatus`, the two properties any user can read.
 async fn failure_detail(portal: &str) -> String {
     if portal.is_empty() {
         return String::new();
@@ -271,6 +270,43 @@ async fn failure_detail(portal: &str) -> String {
     format!("Tunnel exited ({result}, status {status}). Details: journalctl -u {unit}")
 }
 
+const TAIL_LINES: usize = 40;
+const MAX_LENGTH: usize = 300;
+
+/// Best guess at the reason a connection failed: the last error-looking line
+/// of the connect log, else the last non-empty line.
+pub fn error_tail(log_file: &Path) -> String {
+    let Ok(bytes) = std::fs::read(log_file) else {
+        return String::new();
+    };
+    error_tail_of(&String::from_utf8_lossy(&bytes))
+}
+
+pub fn error_tail_of(text: &str) -> String {
+    let tail: Vec<&str> = text.lines().rev().take(TAIL_LINES).collect();
+
+    for line in &tail {
+        let line = line.trim();
+        if line.starts_with("Error:")
+            || line.contains("certificate verify failed")
+            || line.contains("Failed to")
+        {
+            return truncate(line);
+        }
+    }
+    for line in &tail {
+        let line = line.trim();
+        if !line.is_empty() {
+            return truncate(line);
+        }
+    }
+    String::new()
+}
+
+fn truncate(line: &str) -> String {
+    line.chars().take(MAX_LENGTH).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn log_lines_keep_the_python_layout() {
+    fn log_lines_keep_their_layout() {
         let dir = temp_dir("log");
         let log = dir.join("connect.log");
         append_log(&log, &Notice::connected("Work VPN"));
@@ -295,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn notices_match_the_python_wording() {
+    fn notices_keep_their_wording() {
         assert_eq!(Notice::connected("Work VPN").body, "Work VPN");
         assert_eq!(Notice::dropped().title, "VPN disconnected");
         assert!(Notice::dropped().critical);
@@ -318,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn transitions_follow_the_python_suppression_rules() {
+    fn transitions_follow_the_suppression_rules() {
         use Transition::*;
         let cases = [
             (
@@ -400,5 +436,81 @@ mod tests {
                 "{previous:?} -> {state:?} (user_disconnect={user_disconnect}, notified_fail={notified_fail})"
             );
         }
+    }
+    #[test]
+    fn prefers_the_last_error_line() {
+        let text = "\
+    Connected to portal.example.com
+    Error: gateway unreachable
+    random chatter
+    ";
+        assert_eq!(error_tail_of(text), "Error: gateway unreachable");
+    }
+
+    #[test]
+    fn recognises_error_shapes() {
+        let cases = [
+            ("noise\nError: bad cookie\n", "Error: bad cookie"),
+            (
+                "noise\nssl: certificate verify failed\n",
+                "ssl: certificate verify failed",
+            ),
+            (
+                "noise\nFailed to connect to 1.2.3.4\n",
+                "Failed to connect to 1.2.3.4",
+            ),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(error_tail_of(text), expected);
+        }
+    }
+
+    #[test]
+    fn returns_last_error_when_noise_follows() {
+        let text = "Error: first problem\nnoise one\nnoise two\n";
+        assert_eq!(error_tail_of(text), "Error: first problem");
+    }
+
+    #[test]
+    fn falls_back_to_the_last_non_empty_line_trimmed() {
+        assert_eq!(error_tail_of("  hello  \n\n   \n"), "hello");
+        assert_eq!(error_tail_of(""), "");
+        assert_eq!(error_tail_of("\n\n"), "");
+    }
+
+    #[test]
+    fn only_the_last_forty_lines_count() {
+        let mut text = String::from("Error: ancient failure\n");
+        for index in 0..45 {
+            text.push_str(&format!("line {index}\n"));
+        }
+        assert_eq!(error_tail_of(&text), "line 44");
+    }
+
+    #[test]
+    fn truncates_at_three_hundred_characters() {
+        let long = format!("Error: {}", "x".repeat(400));
+        assert_eq!(error_tail_of(&long).len(), MAX_LENGTH);
+        let unicode = "é".repeat(400);
+        assert_eq!(error_tail_of(&unicode).chars().count(), MAX_LENGTH);
+    }
+
+    #[test]
+    fn missing_log_reads_as_empty() {
+        assert_eq!(
+            error_tail(Path::new("/nonexistent/gp-tray/connect.log")),
+            ""
+        );
+    }
+
+    #[test]
+    fn invalid_utf8_is_ignored() {
+        let dir = std::env::temp_dir().join("gp-tray-log-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("connect.log");
+        let mut bytes = b"bad \xff byte\nError: real failure\n".to_vec();
+        bytes.extend_from_slice(b"\xfe\n");
+        std::fs::write(&file, bytes).unwrap();
+        assert_eq!(error_tail(&file), "Error: real failure");
     }
 }

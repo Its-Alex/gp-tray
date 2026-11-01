@@ -139,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn last_gateways_parse_and_render_like_the_python_dict() {
+    fn last_gateways_parse_and_render_in_order() {
         let parsed = LastGateways::parse(
             "a.example.com = GW1\n\nb.example.com = \nbroken line\na.example.com = GW2\n",
         );
