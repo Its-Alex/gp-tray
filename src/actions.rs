@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use std::process::Stdio;
@@ -15,10 +15,8 @@ use tokio::time::Instant;
 
 use crate::config::PortalConfig;
 use crate::engine::{Engine, VpnState};
-use crate::paths::{
-    CONNECT_TIMEOUT, COOKIE_FILE, GATEWAY_FILE, NOTIFICATION_ICON, NOTIFICATION_ICON_AUTH,
-    NOTIFICATION_ICON_ERROR, Paths, SWITCH_TIMEOUT,
-};
+use crate::notify::{Flags, Notice};
+use crate::paths::{CONNECT_TIMEOUT, COOKIE_FILE, GATEWAY_FILE, Paths, SWITCH_TIMEOUT};
 use crate::state_files;
 use crate::systemd;
 use crate::systemd_escape;
@@ -36,83 +34,6 @@ pub enum Request {
         gateway: Option<String>,
     },
     Disconnect,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Notice {
-    pub title: String,
-    pub body: String,
-    pub critical: bool,
-    pub icon: &'static str,
-}
-
-impl Notice {
-    pub fn switching(portal_name: &str, gateway: Option<&str>) -> Self {
-        Self {
-            title: "Switching VPN".to_owned(),
-            body: format!(
-                "→ {portal_name}{}",
-                gateway
-                    .map(|gateway| format!(" ({gateway})"))
-                    .unwrap_or_default()
-            ),
-            critical: false,
-            icon: NOTIFICATION_ICON,
-        }
-    }
-
-    pub fn switch_failed() -> Self {
-        Self {
-            title: "VPN switch failed".to_owned(),
-            body: "Previous session did not disconnect in time.".to_owned(),
-            critical: true,
-            icon: NOTIFICATION_ICON_ERROR,
-        }
-    }
-
-    pub fn auth_timed_out() -> Self {
-        Self {
-            title: "VPN connect timed out".to_owned(),
-            body: "Authentication did not complete in time.".to_owned(),
-            critical: true,
-            icon: NOTIFICATION_ICON_ERROR,
-        }
-    }
-
-    pub fn tunnel_timed_out() -> Self {
-        Self {
-            title: "VPN connect timed out".to_owned(),
-            body: "The tunnel did not come up in time; connection reset.".to_owned(),
-            critical: true,
-            icon: NOTIFICATION_ICON_ERROR,
-        }
-    }
-
-    pub fn auth_cancelled() -> Self {
-        Self {
-            title: "VPN connect cancelled".to_owned(),
-            body: "Authentication was dismissed or failed.".to_owned(),
-            critical: true,
-            icon: NOTIFICATION_ICON_AUTH,
-        }
-    }
-
-    pub fn connect_failed(detail: impl Into<String>) -> Self {
-        Self {
-            title: "VPN connection failed".to_owned(),
-            body: detail.into(),
-            critical: true,
-            icon: NOTIFICATION_ICON_ERROR,
-        }
-    }
-}
-
-/// Notification suppression state shared with the state watcher: a drop the
-/// user asked for is not news, and one failure per attempt is enough.
-#[derive(Debug, Default)]
-pub struct Flags {
-    pub user_disconnect: AtomicBool,
-    pub notified_fail: AtomicBool,
 }
 
 pub struct Actions {
@@ -216,6 +137,12 @@ async fn disconnect(context: Context) {
     tokio::time::sleep(VERIFY_DOWN_DELAY).await;
     if context.engine.state() != VpnState::Disconnected {
         teardown().await;
+    } else {
+        context.clear_active();
+        context
+            .flags
+            .user_disconnect
+            .store(false, Ordering::Relaxed);
     }
 }
 
@@ -583,30 +510,5 @@ mod tests {
     fn failures_are_truncated_to_three_hundred_characters() {
         assert_eq!(truncate(&"x".repeat(400)).len(), MAX_MESSAGE_LENGTH);
         assert_eq!(truncate("short"), "short");
-    }
-
-    #[test]
-    fn notices_match_the_python_wording() {
-        assert_eq!(
-            Notice::switching("Work VPN", Some("EU Gateway")),
-            Notice {
-                title: "Switching VPN".to_owned(),
-                body: "→ Work VPN (EU Gateway)".to_owned(),
-                critical: false,
-                icon: NOTIFICATION_ICON,
-            }
-        );
-        assert_eq!(Notice::switching("Work VPN", None).body, "→ Work VPN");
-        assert_eq!(Notice::switch_failed().title, "VPN switch failed");
-        assert_eq!(
-            Notice::auth_timed_out().body,
-            "Authentication did not complete in time."
-        );
-        assert_eq!(
-            Notice::tunnel_timed_out().body,
-            "The tunnel did not come up in time; connection reset."
-        );
-        assert_eq!(Notice::auth_cancelled().title, "VPN connect cancelled");
-        assert_eq!(Notice::connect_failed("boom").body, "boom");
     }
 }

@@ -3,9 +3,10 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gp_tray::actions::{Actions, Flags};
+use gp_tray::actions::Actions;
 use gp_tray::config;
 use gp_tray::engine::Engine;
+use gp_tray::notify::{self, Flags};
 use gp_tray::paths::Paths;
 use gp_tray::tray::{TrayApp, TrayCommand, icon_theme_path};
 use ksni::TrayMethods;
@@ -49,6 +50,13 @@ async fn run_tray() -> ExitCode {
 
     let flags = Arc::new(Flags::default());
     let (notices, mut notice_rx) = unbounded_channel();
+    notify::spawn_watcher(
+        engine.clone(),
+        paths.clone(),
+        config.clone(),
+        flags.clone(),
+        notices.clone(),
+    );
     let actions = Actions::spawn(
         engine.clone(),
         paths.clone(),
@@ -61,7 +69,7 @@ async fn run_tray() -> ExitCode {
         .map(|exe| icon_theme_path(&exe))
         .unwrap_or_default();
     let (app, mut commands) = TrayApp::new(engine.state(), config, paths.clone(), icon_theme_path);
-    let handle = match app.spawn().await {
+    let handle = match app.assume_sni_available(true).spawn().await {
         Ok(handle) => handle,
         Err(error) => {
             eprintln!("gp-tray: cannot start the tray: {error}");
@@ -87,7 +95,7 @@ async fn run_tray() -> ExitCode {
             },
             notice = notice_rx.recv() => {
                 if let Some(notice) = notice {
-                    eprintln!("gp-tray: {}: {}", notice.title, notice.body);
+                    notify::deliver(&paths.log_file, &notice).await;
                 }
             }
             _ = tokio::signal::ctrl_c() => break,
