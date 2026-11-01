@@ -1,12 +1,15 @@
 use std::io::Write;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use gp_tray::actions::{Actions, Flags};
 use gp_tray::config;
 use gp_tray::engine::Engine;
 use gp_tray::paths::Paths;
 use gp_tray::tray::{TrayApp, TrayCommand, icon_theme_path};
 use ksni::TrayMethods;
+use tokio::sync::mpsc::unbounded_channel;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -43,10 +46,21 @@ async fn run_tray() -> ExitCode {
     let gp_portal = std::env::var("GP_PORTAL").ok();
     let config = config::load(&paths.config_file).with_env_override(gp_portal.as_deref());
     let engine = Engine::spawn().await;
+
+    let flags = Arc::new(Flags::default());
+    let (notices, mut notice_rx) = unbounded_channel();
+    let actions = Actions::spawn(
+        engine.clone(),
+        paths.clone(),
+        config.clone(),
+        flags,
+        notices,
+    );
+
     let icon_theme_path = std::env::current_exe()
         .map(|exe| icon_theme_path(&exe))
         .unwrap_or_default();
-    let (app, mut commands) = TrayApp::new(engine.state(), config, paths, icon_theme_path);
+    let (app, mut commands) = TrayApp::new(engine.state(), config, paths.clone(), icon_theme_path);
     let handle = match app.spawn().await {
         Ok(handle) => handle,
         Err(error) => {
@@ -66,15 +80,27 @@ async fn run_tray() -> ExitCode {
                 handle.update(|app| app.set_state(state)).await;
             }
             command = commands.recv() => match command {
-                None => break,
-                Some(TrayCommand::Quit) => break,
-                Some(command) => eprintln!("gp-tray: action not wired up yet: {command:?}"),
+                None | Some(TrayCommand::Quit) => break,
+                Some(TrayCommand::Connect { portal, gateway }) => actions.connect(portal, gateway),
+                Some(TrayCommand::Disconnect) => actions.disconnect(),
+                Some(TrayCommand::OpenLog) => open_log(&paths),
             },
+            notice = notice_rx.recv() => {
+                if let Some(notice) = notice {
+                    eprintln!("gp-tray: {}: {}", notice.title, notice.body);
+                }
+            }
             _ = tokio::signal::ctrl_c() => break,
         }
     }
     handle.shutdown().await;
     ExitCode::SUCCESS
+}
+
+fn open_log(paths: &Paths) {
+    let _ = std::process::Command::new("xdg-open")
+        .arg(&paths.log_file)
+        .spawn();
 }
 
 fn print_usage() {

@@ -1,6 +1,8 @@
 use zbus::Connection;
 use zbus::zvariant::OwnedObjectPath;
 
+use crate::paths::{TUNNEL_UNIT_PREFIX, TUNNEL_UNIT_SUFFIX};
+
 const SERVICE: &str = "org.freedesktop.systemd1";
 const MANAGER_PATH: &str = "/org/freedesktop/systemd1";
 const MANAGER_INTERFACE: &str = "org.freedesktop.systemd1.Manager";
@@ -88,6 +90,59 @@ pub async fn unit_failure(connection: &Connection, unit_path: &str) -> zbus::Res
     Ok((result, status))
 }
 
+pub async fn start_unit(connection: &Connection, unit: &str) -> zbus::Result<()> {
+    connection
+        .call_method(
+            Some(SERVICE),
+            MANAGER_PATH,
+            Some(MANAGER_INTERFACE),
+            "StartUnit",
+            &(unit, "replace"),
+        )
+        .await?;
+    Ok(())
+}
+
+pub async fn stop_unit(connection: &Connection, unit: &str) -> zbus::Result<()> {
+    connection
+        .call_method(
+            Some(SERVICE),
+            MANAGER_PATH,
+            Some(MANAGER_INTERFACE),
+            "StopUnit",
+            &(unit, "replace"),
+        )
+        .await?;
+    Ok(())
+}
+
+pub async fn unit_path(connection: &Connection, unit: &str) -> zbus::Result<OwnedObjectPath> {
+    let reply = connection
+        .call_method(
+            Some(SERVICE),
+            MANAGER_PATH,
+            Some(MANAGER_INTERFACE),
+            "GetUnit",
+            &(unit,),
+        )
+        .await?;
+    reply.body().deserialize()
+}
+
+/// The message a user can act on, without zbus' own wrapper text.
+pub fn describe(error: &zbus::Error) -> String {
+    match error {
+        zbus::Error::MethodError(_, Some(detail), _) => detail.clone(),
+        other => other.to_string(),
+    }
+}
+
+pub fn is_tunnel_unit(name: &str) -> bool {
+    name.strip_prefix(TUNNEL_UNIT_PREFIX)
+        .and_then(|rest| rest.strip_suffix(TUNNEL_UNIT_SUFFIX))
+        .is_some_and(|instance| !instance.is_empty())
+}
+
 async fn unit_property(
     connection: &Connection,
     unit_path: &str,
@@ -102,4 +157,27 @@ async fn unit_property(
             &(UNIT_INTERFACE, property),
         )
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognises_our_tunnel_units() {
+        for name in [
+            "gp-tray-tunnel@portal.example.com.service",
+            "gp-tray-tunnel@a.service",
+        ] {
+            assert!(is_tunnel_unit(name), "{name}");
+        }
+        for name in [
+            "gp-tray.service",
+            "gp-tray-tunnel@.service",
+            "gp-tray-tunnel@a.service.d",
+            "other@gp-tray-tunnel@a.service",
+        ] {
+            assert!(!is_tunnel_unit(name), "{name}");
+        }
+    }
 }

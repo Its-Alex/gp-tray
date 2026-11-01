@@ -14,7 +14,7 @@ use zbus::message::Type as MessageType;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::{Connection, Message, MessageStream};
 
-use crate::paths::{TUN_IFNAME, TUNNEL_UNIT_PREFIX, TUNNEL_UNIT_SUFFIX};
+use crate::paths::TUN_IFNAME;
 use crate::systemd;
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
@@ -76,6 +76,7 @@ impl Snapshot {
     }
 }
 
+#[derive(Clone)]
 pub struct Engine {
     state: watch::Receiver<VpnState>,
     commands: mpsc::UnboundedSender<Command>,
@@ -267,7 +268,10 @@ impl Session {
         let listings = systemd::list_units(&self.connection).await?;
         let mut units = BTreeMap::new();
         self.unit_paths.clear();
-        for listing in listings.into_iter().filter(|unit| is_our_unit(&unit.name)) {
+        for listing in listings
+            .into_iter()
+            .filter(|unit| systemd::is_tunnel_unit(&unit.name))
+        {
             self.unit_paths
                 .insert(listing.path.clone(), listing.name.clone());
             units.insert(listing.name, listing.active_state);
@@ -296,7 +300,7 @@ impl Session {
         };
         match signal {
             UnitSignal::Created { name, path } => {
-                if !is_our_unit(&name) {
+                if !systemd::is_tunnel_unit(&name) {
                     return Ok(None);
                 }
                 self.unit_paths.insert(path.clone(), name.clone());
@@ -307,7 +311,7 @@ impl Session {
             }
             UnitSignal::Removed { name, path } => {
                 self.unit_paths.remove(&path);
-                Ok(is_our_unit(&name).then_some(EngineEvent::UnitRemoved(name)))
+                Ok(systemd::is_tunnel_unit(&name).then_some(EngineEvent::UnitRemoved(name)))
             }
             UnitSignal::Properties { path, active_state } => {
                 let Some(name) = self.unit_paths.get(&path).cloned() else {
@@ -500,12 +504,6 @@ fn owned_string(value: &OwnedValue) -> Option<String> {
     }
 }
 
-fn is_our_unit(name: &str) -> bool {
-    name.strip_prefix(TUNNEL_UNIT_PREFIX)
-        .and_then(|rest| rest.strip_suffix(TUNNEL_UNIT_SUFFIX))
-        .is_some_and(|instance| !instance.is_empty())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -570,24 +568,6 @@ mod tests {
         let mut snapshot = snapshot(&[(UNIT, "active")], true);
         snapshot.authenticating = true;
         assert_eq!(snapshot.state(), VpnState::Authenticating);
-    }
-
-    #[test]
-    fn only_our_tunnel_units_are_tracked() {
-        for name in [
-            "gp-tray-tunnel@portal.example.com.service",
-            "gp-tray-tunnel@a.service",
-        ] {
-            assert!(is_our_unit(name), "{name}");
-        }
-        for name in [
-            "gp-tray.service",
-            "gp-tray-tunnel@.service",
-            "gp-tray-tunnel@a.service.d",
-            "other@gp-tray-tunnel@a.service",
-        ] {
-            assert!(!is_our_unit(name), "{name}");
-        }
     }
 
     #[test]
