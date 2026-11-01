@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,12 +16,8 @@ use tokio::sync::mpsc::unbounded_channel;
 #[tokio::main]
 async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match args
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        .as_slice()
-    {
+    let words: Vec<&str> = args.iter().map(String::as_str).collect();
+    match words.as_slice() {
         ["status"] => print_state().await,
         ["status", "--watch"] => watch_state().await,
         ["--version"] | ["-V"] => {
@@ -91,7 +88,7 @@ async fn run_tray() -> ExitCode {
                 None | Some(TrayCommand::Quit) => break,
                 Some(TrayCommand::Connect { portal, gateway }) => actions.connect(portal, gateway),
                 Some(TrayCommand::Disconnect) => actions.disconnect(),
-                Some(TrayCommand::OpenLog) => open_log(&paths),
+                Some(TrayCommand::OpenLog) => open_log(&paths.log_file),
             },
             notice = notice_rx.recv() => {
                 if let Some(notice) = notice {
@@ -105,10 +102,8 @@ async fn run_tray() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn open_log(paths: &Paths) {
-    let _ = std::process::Command::new("xdg-open")
-        .arg(&paths.log_file)
-        .spawn();
+fn open_log(log_file: &Path) {
+    let _ = std::process::Command::new("xdg-open").arg(log_file).spawn();
 }
 
 fn print_usage() {
