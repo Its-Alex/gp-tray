@@ -179,10 +179,9 @@ The tray is a Rust crate; each module owns one concern:
 | [`src/engine.rs`](../src/engine.rs) | Event sources (systemd D-Bus signals, netlink link events, `gpauth` exit) merged into one `VpnState` stream |
 | [`src/tray.rs`](../src/tray.rs) | StatusNotifierItem icon, title and menu, rendered from that state |
 | [`src/actions.rs`](../src/actions.rs) | Connect (SAML, cookie handoff, `StartUnit`), disconnect, switch |
-| [`src/notify.rs`](../src/notify.rs) | Desktop notifications, suppression rules, connect log |
-| [`src/systemd.rs`](../src/systemd.rs) | systemd manager client: units, jobs, failure properties |
+| [`src/notify.rs`](../src/notify.rs) | Desktop notifications, suppression rules, the connect log and its error extraction |
+| [`src/systemd.rs`](../src/systemd.rs) | systemd manager client: units, jobs, failure properties, unit-name escaping |
 | [`src/config.rs`](../src/config.rs), [`src/state_files.rs`](../src/state_files.rs), [`src/paths.rs`](../src/paths.rs) | `portals.conf`, remembered gateways, XDG locations |
-| [`src/systemd_escape.rs`](../src/systemd_escape.rs), [`src/log_tail.rs`](../src/log_tail.rs) | Unit-name escaping, error-line extraction |
 
 Everything else:
 

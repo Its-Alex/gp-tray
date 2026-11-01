@@ -5,9 +5,11 @@ built on the open-source [`gpclient`](https://github.com/yuezk/GlobalProtect-ope
 It gives you the one thing the official client doesn't ship on Linux: a proper
 tray applet with connect/disconnect, multi-portal switching, and desktop alerts.
 
-This is a fork of [DavidVeksler/gp-tray](https://github.com/DavidVeksler/gp-tray),
-reworked "the Linux way" — see [Changes from upstream](#changes-from-upstream).
-Packaged for Arch Linux on the [AUR](https://aur.archlinux.org/packages/gp-tray).
+It is a single Rust binary that reacts to systemd and kernel events — no
+polling loop, no Python or GTK runtime — and a fork of
+[DavidVeksler/gp-tray](https://github.com/DavidVeksler/gp-tray) reworked "the
+Linux way". Packaged for Arch Linux on the
+[AUR](https://aur.archlinux.org/packages/gp-tray).
 
 ![status](https://img.shields.io/badge/platform-linux-blue) ![license](https://img.shields.io/badge/license-MIT-green)
 
@@ -17,73 +19,93 @@ Packaged for Arch Linux on the [AUR](https://aur.archlinux.org/packages/gp-tray)
 
 ## Features
 
-- **Live status** in the tray — Connected / Connecting / Disconnected, with the
-  active portal shown by name. Each state has its own colored icon (green /
-  amber / grey) so the tray reads at a glance regardless of icon theme.
-- **Event-driven, no polling** — the tray subscribes to systemd's unit signals
-  and to kernel link events for `gp0`, so the icon changes the moment the
-  tunnel does, and an idle tray wakes up for nothing.
-- **Multiple portals**, switched one click at a time (GlobalProtect runs a
-  single tunnel). Great when one portal is for databases and another for VMs.
-- **Gateway choice** — declare a portal's gateways in `portals.conf` and pick
-  one from a submenu (or *Auto (fastest)*); the tray remembers your last
-  choice per portal.
-- **One-click switching** — picking another portal auto-disconnects the current
-  tunnel, waits for it to drop, then connects the new one.
-- **Desktop notifications** on:
-  - connect failure (shows the real error line from the log, e.g. a TLS/cert problem),
-  - authentication cancelled/dismissed,
-  - unexpected tunnel drop,
-  - successful connect.
-- **Accurate state detection** — tunnel state comes from the systemd unit
-  signals pushed over D-Bus plus kernel link events for the `gp0` device,
-  not process heuristics.
-- **No pkexec, no password prompts** — SAML auth runs unprivileged in your
-  browser (`gpauth`); the tunnel runs as a systemd **system** unit
-  (`gp-tray-tunnel@<portal>.service`) that a shipped polkit rule lets active
-  local users start/stop without authentication.
+- **Live status** — Connected / Connecting / Disconnected with the active
+  portal by name, each with its own green / amber / grey icon. The state comes
+  from systemd's unit signals and netlink link events for `gp0`, so the icon
+  changes the moment the tunnel does.
+- **Multiple portals and gateways** — one tunnel at a time, switched with one
+  click; gateways declared per portal appear in a submenu (*Auto (fastest)*
+  included), and the tray remembers your last choice.
+- **Desktop notifications** — connected, unexpected drop, connect failure
+  (with the real error line), authentication cancelled, and timeouts.
+- **No pkexec, no password prompts** — SAML runs unprivileged in your browser
+  (`gpauth`); the tunnel is a systemd **system** unit that a shipped polkit
+  rule lets active local users start/stop.
+- **Survives restarts** — the tunnel is supervised by systemd, so it stays up
+  when the tray restarts, and is torn down cleanly on suspend.
 
-## Changes from upstream
+## Requirements
 
-What this fork changes compared to
-[DavidVeksler/gp-tray](https://github.com/DavidVeksler/gp-tray):
+- [`gpclient` / `gpauth`](https://github.com/yuezk/GlobalProtect-openconnect#installation)
+- polkit, which evaluates the shipped rule authorizing tunnel start/stop
+  (`pkexec` itself is not used)
+- a StatusNotifierItem-capable desktop: KDE Plasma, XFCE, Cinnamon, MATE and
+  friends work out of the box; GNOME Shell needs the
+  [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/)
 
-- **Rust instead of Python and GTK.** The tray is one compiled binary
-  (`tokio`, `zbus`, `ksni`, `rtnetlink`), so there is no Python, PyGObject,
-  GTK 3 or AppIndicator runtime to install, and no interpreter start-up on a
-  session login.
-- **Event-driven instead of a 3 second poll.** The tray subscribes to
-  systemd's `PropertiesChanged`/`UnitNew` signals and to `RTNLGRP_LINK`
-  events for `gp0`; the icon follows the tunnel within milliseconds, and a
-  disconnect started outside the tray is reflected immediately too.
-- **No pkexec, no password prompts.** Upstream ran
-  `pkexec gpclient connect/disconnect`, prompting for a password on every
-  action and force-killing processes on disconnect. Here SAML auth runs
-  unprivileged (`gpauth` in your browser) and the tunnel is a systemd
-  **system** unit (`gp-tray-tunnel@<portal>.service`) with a fixed command
-  line, authorized by a shipped polkit rule — see
-  [How privileges work](#how-privileges-work).
-- **systemd user service** (`gp-tray.service`, bound to
-  `graphical-session.target`) instead of an ad-hoc
-  `X-GNOME-Autostart` desktop file.
-- **Supervised tunnel** — the VPN survives tray restarts, logs to the
-  journal, and is torn down cleanly (`SIGINT` = openconnect logout).
-- **Honest state detection** — systemd unit state cross-checked with the live
-  `gp0` link, replacing `pgrep gpclient` heuristics and any polling loop.
-- **XDG Base Directory compliance** — config in
-  `$XDG_CONFIG_HOME/gp-tray/`, logs/state in `$XDG_CACHE_HOME/gp-tray/`,
-  with a commented `portals.conf` template created on first run.
-- **Distinct per-state tray icons** (green / amber / grey shields) shipped
-  and installed into the hicolor theme — upstream relied on theme VPN
-  glyphs that are often missing or indistinguishable.
-- **Proper packaging** — a `Makefile` with `DESTDIR`/`PREFIX`
-  (`install.sh` removed), the canonical
-  [PKGBUILD](packaging/arch/PKGBUILD) in-tree, an
-  [AUR package](https://aur.archlinux.org/packages/gp-tray), and a
-  [release pipeline](RELEASING.md) (`scripts/release.sh` + GitHub Actions)
-  that publishes each tag to the AUR automatically.
+Nothing else at runtime. For a build from source you also need Rust 1.85 or
+newer (edition 2024) with `cargo`. Full list, and what each piece is for:
+[docs/dependencies.md](docs/dependencies.md).
 
-## How privileges work
+## Install
+
+### Arch Linux (AUR)
+
+```bash
+yay -S gp-tray   # or: paru -S gp-tray
+systemctl --user daemon-reload
+systemctl --user enable --now gp-tray.service
+```
+
+### From source
+
+```bash
+git clone https://github.com/Its-Alex/gp-tray.git
+cd gp-tray
+make install-user               # builds the tray (cargo) and installs it to ~/.local
+sudo make install-privileged    # tunnel unit, root helper, polkit rule, tmpfiles
+systemctl --user daemon-reload
+systemctl --user enable --now gp-tray.service
+```
+
+For a system-wide install instead, build as yourself and then install:
+
+```bash
+cargo build --release --locked
+sudo make install PREFIX=/usr
+```
+
+### First install only
+
+The handoff directory has to be created once and systemd has to read the new
+system unit:
+
+```bash
+sudo systemd-tmpfiles --create gp-tray.conf
+sudo systemctl daemon-reload
+```
+
+## Configuration
+
+Portals live in `$XDG_CONFIG_HOME/gp-tray/portals.conf`
+(`~/.config/gp-tray/portals.conf`), one per line as
+`Friendly Name = hostname`, with optional gateways after `|`:
+
+```ini
+Work VPN      = portal.example.com | US-East, EU-Frankfurt
+Secondary VPN = vpn2.example.com
+```
+
+A commented template is created on first start. Lines starting with `#` are
+ignored, and `GP_PORTAL` injects an extra portal at runtime. Gateway names must
+match what the portal reports; portals without a gateway list connect with
+`--auto-gateway`. Restart the service after editing:
+
+```bash
+systemctl --user restart gp-tray.service
+```
+
+## How it works
 
 ```
 you click Connect
@@ -94,106 +116,20 @@ you click Connect
                     by systemd, cookie via systemd credentials, then deleted)
 ```
 
-Only the tunnel itself runs as root, under a static unit whose command line
-is fixed on disk; the polkit rule authorizes exactly that unit's
-start/stop/restart for active local sessions (the same trust model as
-NetworkManager). Tunnel logs: `journalctl -u 'gp-tray-tunnel@*'`.
+Only the tunnel runs as root, under a static unit whose command line is fixed
+on disk; the polkit rule authorizes exactly that unit's start/stop/restart,
+the same trust model NetworkManager uses. Full details, diagrams included:
+[docs/architecture.md](docs/architecture.md).
 
-Full details, diagrams included: [docs/architecture.md](docs/architecture.md).
-
-## Requirements
-
-Full list with what each tool is used for: [docs/dependencies.md](docs/dependencies.md).
-
-- [`gpclient`](https://github.com/yuezk/GlobalProtect-openconnect) (`gpclient`, `gpauth`)
-- A StatusNotifierItem-capable desktop: KDE Plasma, XFCE, Cinnamon, MATE and
-  friends work out of the box; on GNOME Shell see the note below.
-- polkit — evaluates the shipped rule that authorizes tunnel start/stop
-  (`pkexec` itself is not used).
-- Nothing else at runtime. The tray is a self-contained binary that speaks
-  D-Bus and netlink directly — no Python, GTK, AppIndicator or libnotify
-  libraries. The released package and `make install` take care of the rest.
-- **Building from source:** Rust 1.85 or newer (edition 2024) with `cargo`.
-  `make install` / `make install-user` run `cargo build --release --locked`.
-- **GNOME Shell users:** the top-bar tray icon needs the [AppIndicator and
-  KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/)
-  extension — vanilla GNOME Shell (Wayland or X11) hides tray icons without
-  it.
-
-## Install
-
-### Arch Linux (AUR)
-
-```bash
-yay -S gp-tray   # or: paru -S gp-tray
-```
-
-### From source
-
-```bash
-git clone https://github.com/Its-Alex/gp-tray.git
-cd gp-tray
-make install-user               # builds the tray (cargo) and installs it to ~/.local
-sudo make install-privileged    # tunnel unit, root helper, polkit rule, tmpfiles
-sudo systemd-tmpfiles --create gp-tray.conf && sudo systemctl daemon-reload
-# or everything system-wide in one go (build as yourself first, then install):
-cargo build --release --locked
-sudo make install PREFIX=/usr
-```
-
-### Run it
-
-gp-tray runs as a systemd **user** service tied to your graphical session:
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now gp-tray.service
-```
-
-On first run it creates `~/.config/gp-tray/portals.conf` — edit it, then
-restart the service:
-
-```bash
-$EDITOR ~/.config/gp-tray/portals.conf
-```
-
-```ini
-# Friendly Name = portal.hostname
-Work VPN      = portal.example.com
-Secondary VPN = vpn2.example.com
-```
-
-```bash
-systemctl --user restart gp-tray.service
-```
-
-Logs go to the journal: `journalctl --user -u gp-tray.service`.
-
-The app-menu launcher (`gp-tray.desktop`) restarts the same user service, so
-clicking it relaunches the tray without a terminal; its right-click menu has a
-"Stop GlobalProtect Tray" action.
-
-## Configuration
-
-Portals live in `$XDG_CONFIG_HOME/gp-tray/portals.conf`
-(`~/.config/gp-tray/portals.conf` by default), one per line as
-`Friendly Name = hostname`, with optional gateways after `|`:
-
-```ini
-Work VPN      = portal.example.com | US-East, EU-Frankfurt
-Secondary VPN = vpn2.example.com
-```
-
-Lines starting with `#` are ignored. You can also
-set the `GP_PORTAL` environment variable to inject an extra portal at runtime.
-Gateway names must match what the portal reports (there is no upstream
-command to list them; your VPN admin or the official client's gateway picker
-knows them). Portals without a gateway list connect with `--auto-gateway`.
+Tray logs: `journalctl --user -u gp-tray.service`. Tunnel logs:
+`journalctl -u 'gp-tray-tunnel@*'`. The connect log (with `gpauth` output) is
+`~/.cache/gp-tray/connect.log`, reachable from the tray menu; `gp-tray status
+--watch` prints every state transition as the tray sees it.
 
 ## Troubleshooting
 
 **`certificate verify failed` / `unable to get local issuer certificate`.**
-Your portal is serving a valid cert but omitting an intermediate CA. Fetch the
+Your portal serves a valid certificate but omits an intermediate CA. Fetch the
 intermediate named in the leaf certificate's *CA Issuers* URL, then trust it:
 
 ```bash
@@ -201,31 +137,49 @@ sudo cp intermediate.crt /usr/local/share/ca-certificates/
 sudo update-ca-certificates
 ```
 
-As a last resort you can add `--ignore-tls-errors` to the `gpclient` invocation
-in `/usr/lib/gp-tray/gp-tray-tunnel`, but installing the intermediate is the
-correct, secure fix.
-
 **A connect fails with a permissions error** (`Access denied`,
-`Interactive authentication required`). The polkit rule isn't installed (or
-polkit wasn't restarted after a manual install). Check
+`Interactive authentication required`). The polkit rule isn't installed, or
+polkit wasn't reloaded after a manual install. Check
 `/usr/share/polkit-1/rules.d/50-gp-tray.rules` (package) or
 `/etc/polkit-1/rules.d/` (source install).
 
 **Connect fails with `/run/gp-tray missing`.** The tmpfiles entry hasn't been
-applied yet: `sudo systemd-tmpfiles create gp-tray.conf`.
+applied: `sudo systemd-tmpfiles create gp-tray.conf`.
 
-**The icon stays on "Connecting" while the VPN is up.** That would mean the
-tray is not receiving systemd's unit signals; restart it
-(`systemctl --user restart gp-tray.service`). `gp-tray status --watch` prints
-the transitions the engine sees, which is the quickest way to tell a state
-problem from a UI one.
+**The icon stays on "Connecting" while the VPN is up.** The tray isn't
+receiving systemd's unit signals — restart it
+(`systemctl --user restart gp-tray.service`), then check
+`gp-tray status --watch` to see whether the engine or the UI is at fault.
+
+## Changes from upstream
+
+- **Rust instead of Python and GTK** — one compiled binary, no interpreter
+  start-up, no PyGObject/GTK/AppIndicator runtime dependencies.
+- **Event-driven instead of a 3 second poll** — systemd's `PropertiesChanged`
+  / `UnitNew` signals plus `RTNLGRP_LINK` events for `gp0`; version 2.0.0 is
+  this rewrite.
+- **No pkexec, no password prompts** — upstream ran `pkexec gpclient
+  connect/disconnect`; here SAML is unprivileged and the tunnel is a systemd
+  unit authorized by a polkit rule.
+- **systemd user service** instead of an ad-hoc `X-GNOME-Autostart` entry, and
+  a tunnel that survives tray restarts and logs to the journal.
+- **XDG Base Directory compliance** — config in `$XDG_CONFIG_HOME/gp-tray/`,
+  logs and state in `$XDG_CACHE_HOME/gp-tray/`.
+- **Distinct per-state icons** shipped and installed into the hicolor theme,
+  and **proper packaging** — a `Makefile` with `DESTDIR`/`PREFIX`, the
+  canonical [PKGBUILD](packaging/arch/PKGBUILD) in-tree, an
+  [AUR package](https://aur.archlinux.org/packages/gp-tray), and a
+  [release pipeline](RELEASING.md) that publishes each tag.
 
 ## Releasing
 
-See [RELEASING.md](RELEASING.md) for the tag + AUR update process.
+See [RELEASING.md](RELEASING.md) for the tag + AUR process.
 
 ## License
 
 MIT © David Veksler (original author). Fork maintained by
 [Its-Alex](https://github.com/Its-Alex). Not affiliated with Palo Alto Networks
 or GlobalProtect.
+
+This codebase is vibecoded: written by Claude (an Anthropic model) working
+under human direction, review and testing.
